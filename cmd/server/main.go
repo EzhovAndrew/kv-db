@@ -1,0 +1,31 @@
+package main
+
+import (
+	"context"
+	"os/signal"
+	"syscall"
+
+	"github.com/EzhovAndrew/kv-db/internal/configuration"
+	"github.com/EzhovAndrew/kv-db/internal/initialization"
+	"github.com/EzhovAndrew/kv-db/internal/logging"
+)
+
+func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	logging.Init()
+	cfg, err := configuration.NewConfig()
+	if err != nil {
+		logging.Fatal(err.Error())
+	}
+
+	initializer, err := initialization.NewInitializer(cfg)
+	if err != nil {
+		logging.Fatal(err.Error())
+	}
+
+	if err := initializer.StartDatabase(ctx); err != nil {
+		logging.Fatal(err.Error())
+	}
+}
