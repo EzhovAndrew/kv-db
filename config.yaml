@@ -1,0 +1,12 @@
+engine:
+  type: "in_memory"
+network:
+  ip: "127.0.0.1"
+  port: 3223
+  max_connections: 100
+  max_message_size: 4096
+  idle_timeout: 300
+  graceful_shutdown_timeout: 5
+logging:
+  level: "info"
+  output: "stdout"

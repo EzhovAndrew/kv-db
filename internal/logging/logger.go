@@ -1,30 +1,54 @@
 package logging
 
 import (
-	"os"
-
+	"github.com/EzhovAndrew/kv-db/internal/configuration"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
 
 var globalLogger *zap.Logger
 
-func Init() {
-	stdout := zapcore.AddSync(os.Stdout)
+func Init(cfg *configuration.LoggingConfig) {
+	level, err := zapcore.ParseLevel(cfg.Level)
+	if err != nil {
+		level = zapcore.InfoLevel
+	}
 
-	cfg := zap.NewProductionEncoderConfig()
-	cfg.TimeKey = "timestamp"
-	cfg.EncodeTime = zapcore.ISO8601TimeEncoder
-	cfg.EncodeLevel = zapcore.CapitalColorLevelEncoder
+	cfgEncoder := zap.NewProductionEncoderConfig()
+	cfgEncoder.TimeKey = "timestamp"
+	cfgEncoder.EncodeTime = zapcore.ISO8601TimeEncoder
+	cfgEncoder.EncodeLevel = zapcore.CapitalColorLevelEncoder
 
-	encoder := zapcore.NewConsoleEncoder(cfg)
+	if cfg.Output == "" {
+		cfg.Output = "stdout"
+	}
 
-	core := zapcore.NewCore(encoder, stdout, zapcore.InfoLevel)
-	globalLogger = zap.New(core)
+	config := zap.Config{
+		Level:            zap.NewAtomicLevelAt(level),
+		Development:      false,
+		Encoding:         "console",
+		EncoderConfig:    cfgEncoder,
+		OutputPaths:      []string{cfg.Output},
+		ErrorOutputPaths: []string{cfg.Output},
+		DisableCaller:    true,
+	}
+
+	globalLogger, err = config.Build()
+	if err != nil {
+		panic(err)
+	}
 }
 
 func Info(msg string, fields ...zapcore.Field) {
 	globalLogger.Info(msg, fields...)
+}
+
+func Warn(msg string, fields ...zapcore.Field) {
+	globalLogger.Warn(msg, fields...)
+}
+
+func Error(msg string, fields ...zapcore.Field) {
+	globalLogger.Error(msg, fields...)
 }
 
 func Fatal(msg string, fields ...zapcore.Field) {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log"
 	"os/signal"
 	"syscall"
 
@@ -14,11 +15,12 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	logging.Init()
 	cfg, err := configuration.NewConfig()
 	if err != nil {
-		logging.Fatal(err.Error())
+		log.Fatal(err)
 	}
+	logging.Init(&cfg.Logging)
+	logging.Info("Starting server")
 
 	initializer, err := initialization.NewInitializer(cfg)
 	if err != nil {
