@@ -2,16 +2,13 @@ package database
 
 import (
 	"context"
-	"errors"
 
 	"github.com/EzhovAndrew/kv-db/internal/configuration"
 	"github.com/EzhovAndrew/kv-db/internal/database/compute"
-	"github.com/EzhovAndrew/kv-db/internal/database/storage/engine/in_memory"
+	"github.com/EzhovAndrew/kv-db/internal/database/storage"
 )
 
-var ErrUnknownEngine = errors.New("unknown engine type")
-
-type Engine interface {
+type Storage interface {
 	Get(ctx context.Context, key string) (string, error)
 	Set(ctx context.Context, key, value string) error
 	Delete(ctx context.Context, key string) error
@@ -19,23 +16,16 @@ type Engine interface {
 
 type Database struct {
 	compute *compute.Compute
-	engine  Engine
+	storage Storage
 }
 
 func NewDatabase(cfg *configuration.Config) (*Database, error) {
 	compute := compute.NewCompute()
-	var engine Engine
-	switch cfg.Engine.Type {
-	case configuration.EngineInMemoryKey:
-		inMemoryEngine, err := in_memory.NewEngine()
-		if err != nil {
-			return nil, err
-		}
-		engine = inMemoryEngine
-	default:
-		return nil, ErrUnknownEngine
+	storage, err := storage.NewStorage(&cfg.Engine)
+	if err != nil {
+		return nil, err
 	}
-	return &Database{compute: compute, engine: engine}, nil
+	return &Database{compute: compute, storage: storage}, nil
 }
 
 func (db *Database) Start(ctx context.Context) error {

@@ -26,12 +26,12 @@ func NewInitializer(cfg *configuration.Config) (*Initializer, error) {
 	if err != nil {
 		return nil, err
 	}
-	logging.Info("Database initialized")
+	logging.Info("Database configured")
 	server, err := network.NewTCPServer(&cfg.Network)
 	if err != nil {
 		return nil, err
 	}
-	logging.Info("Server initialized")
+	logging.Info("Server configured")
 	return &Initializer{
 		Config: cfg,
 		server: server,
