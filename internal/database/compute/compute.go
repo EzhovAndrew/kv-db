@@ -8,10 +8,9 @@ import (
 type Compute struct{}
 
 var (
-	ErrEmptyCommand            = errors.New("empty command")
-	ErrInvalidCommandStructure = errors.New("invalid command structure")
-	ErrUnknownCommand          = errors.New("unknown command")
-	ErrInvalidArgumentsNumber  = errors.New("invalid arguments number")
+	ErrEmptyCommand           = errors.New("empty command")
+	ErrUnknownCommand         = errors.New("unknown command")
+	ErrInvalidArgumentsNumber = errors.New("invalid arguments number")
 )
 
 func NewCompute() *Compute {

@@ -61,7 +61,7 @@ func (s *TCPServer) HandleRequests(ctx context.Context, handler TCPHandler) {
 			}
 
 			if !s.semaphore.TryAcquire() {
-				_, err := conn.Write([]byte("Connection limit exceeded, try again later"))
+				_, err := conn.Write([]byte("ERROR: Connection limit exceeded, try again later"))
 				if err != nil {
 					logging.Error("unable to send message about connection limit exceeded", zap.Error(err))
 				}
@@ -114,7 +114,7 @@ func (s *TCPServer) handleConnection(ctx context.Context, conn net.Conn, handler
 	}()
 
 	buffer := s.bufferPool.Get().(*[]byte)
-	defer s.bufferPool.Put(&buffer)
+	defer s.bufferPool.Put(buffer)
 
 	for {
 		select {

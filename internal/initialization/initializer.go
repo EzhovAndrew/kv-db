@@ -13,7 +13,6 @@ import (
 var ErrConfigIsNil = errors.New("config is nil")
 
 type Initializer struct {
-	Config *configuration.Config
 	server *network.TCPServer
 	db     *database.Database
 }
@@ -33,7 +32,6 @@ func NewInitializer(cfg *configuration.Config) (*Initializer, error) {
 	}
 	logging.Info("Server configured")
 	return &Initializer{
-		Config: cfg,
 		server: server,
 		db:     db,
 	}, nil

@@ -263,12 +263,10 @@ func TestCompute_Parse_ErrorTypes(t *testing.T) {
 	// Test that all error types are properly defined
 	t.Run("error constants exist", func(t *testing.T) {
 		assert.NotNil(t, ErrEmptyCommand)
-		assert.NotNil(t, ErrInvalidCommandStructure)
 		assert.NotNil(t, ErrUnknownCommand)
 		assert.NotNil(t, ErrInvalidArgumentsNumber)
 
 		assert.Contains(t, ErrEmptyCommand.Error(), "empty command")
-		assert.Contains(t, ErrInvalidCommandStructure.Error(), "invalid command structure")
 		assert.Contains(t, ErrUnknownCommand.Error(), "unknown command")
 		assert.Contains(t, ErrInvalidArgumentsNumber.Error(), "invalid arguments number")
 	})

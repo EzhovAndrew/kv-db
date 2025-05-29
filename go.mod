@@ -5,6 +5,7 @@ go 1.24.3
 require github.com/stretchr/testify v1.10.0
 
 require (
+	github.com/chzyer/readline v1.5.1
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.8 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect
