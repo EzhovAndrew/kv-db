@@ -61,8 +61,14 @@ func (s *TCPServer) HandleRequests(ctx context.Context, handler TCPHandler) {
 			}
 
 			if !s.semaphore.TryAcquire() {
-				conn.Write([]byte("Connection limit exceeded, try again later"))
-				conn.Close()
+				_, err := conn.Write([]byte("Connection limit exceeded, try again later"))
+				if err != nil {
+					logging.Error("unable to send message about connection limit exceeded", zap.Error(err))
+				}
+				err = conn.Close()
+				if err != nil {
+					logging.Error("error in conn.Close()", zap.Error(err))
+				}
 				continue
 			}
 
@@ -76,7 +82,10 @@ func (s *TCPServer) HandleRequests(ctx context.Context, handler TCPHandler) {
 	}()
 
 	<-ctx.Done()
-	s.listener.Close()
+	err := s.listener.Close()
+	if err != nil {
+		logging.Warn("error in listener.Close()", zap.Error(err))
+	}
 	wg.Wait()
 
 	done := make(chan struct{})
@@ -104,7 +113,7 @@ func (s *TCPServer) handleConnection(ctx context.Context, conn net.Conn, handler
 		}
 	}()
 
-	buffer := s.bufferPool.Get().([]byte)
+	buffer := s.bufferPool.Get().(*[]byte)
 	defer s.bufferPool.Put(&buffer)
 
 	for {
@@ -118,7 +127,7 @@ func (s *TCPServer) handleConnection(ctx context.Context, conn net.Conn, handler
 				return
 			}
 		}
-		count, err := conn.Read(buffer)
+		count, err := conn.Read(*buffer)
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF) {
 				return
@@ -131,7 +140,7 @@ func (s *TCPServer) handleConnection(ctx context.Context, conn net.Conn, handler
 			return
 		}
 
-		response := handler(ctx, buffer[:count])
+		response := handler(ctx, (*buffer)[:count])
 		if err = conn.SetWriteDeadline(time.Now().Add(time.Second * time.Duration(s.cfg.IdleTimeout))); err != nil {
 			logging.Error("unable to set write deadline", zap.Error(err))
 			return

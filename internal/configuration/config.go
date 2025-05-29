@@ -9,6 +9,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+var EngineInMemoryKey = "in_memory"
+
 type EngineConfig struct {
 	Type string `yaml:"type" validate:"required,oneof=in_memory"`
 }
@@ -40,7 +42,10 @@ var (
 
 func init() {
 	// Register custom validation for port range
-	validate.RegisterValidation("port_range", validatePortRange)
+	err := validate.RegisterValidation("port_range", validatePortRange)
+	if err != nil {
+		panic(err)
+	}
 }
 
 func validatePortRange(fl validator.FieldLevel) bool {

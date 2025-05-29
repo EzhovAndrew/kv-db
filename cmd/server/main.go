@@ -20,13 +20,14 @@ func main() {
 		log.Fatal(err)
 	}
 	logging.Init(&cfg.Logging)
-	logging.Info("Starting server")
+	logging.Info("Parse config")
 
 	initializer, err := initialization.NewInitializer(cfg)
 	if err != nil {
 		logging.Fatal(err.Error())
 	}
 
+	logging.Info("Start database")
 	if err := initializer.StartDatabase(ctx); err != nil {
 		logging.Fatal(err.Error())
 	}
