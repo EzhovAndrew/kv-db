@@ -28,7 +28,7 @@ func NewEngine() (*Engine, error) {
 
 func (e *Engine) Get(ctx context.Context, key string) (string, error) {
 	var result string
-	concurrency.WithLock(&e.lock, func() {
+	concurrency.WithLock(e.lock.RLocker(), func() {
 		result = e.db[key]
 	})
 	if result == "" {
