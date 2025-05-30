@@ -15,6 +15,13 @@ type EngineConfig struct {
 	Type string `yaml:"type" validate:"required,oneof=in_memory"`
 }
 
+type WALConfig struct {
+	FlushBatchSize    int    `yaml:"flush_batch_size" validate:"required,min=5,max=1000"`
+	FlushBatchTimeout int    `yaml:"flush_batch_timeout" validate:"required,min=5,max=1000"`
+	MaxSegmentSize    int    `yaml:"max_segment_size" validate:"required,min=4096,max=104857600"`
+	DataDirectory     string `yaml:"data_directory" validate:"required"`
+}
+
 type LoggingConfig struct {
 	Level  string `yaml:"level" validate:"required,oneof=debug info warn error fatal"`
 	Output string `yaml:"output"`
@@ -33,6 +40,7 @@ type Config struct {
 	Engine  EngineConfig  `yaml:"engine"`
 	Logging LoggingConfig `yaml:"logging"`
 	Network NetworkConfig `yaml:"network"`
+	WAL     *WALConfig    `yaml:"wal"`
 }
 
 var (
@@ -41,7 +49,6 @@ var (
 )
 
 func init() {
-	// Register custom validation for port range
 	err := validate.RegisterValidation("port_range", validatePortRange)
 	if err != nil {
 		panic(err)

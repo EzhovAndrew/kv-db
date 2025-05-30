@@ -10,3 +10,8 @@ network:
 logging:
   level: "info"
   output: "stdout"
+wal:  
+  flush_batch_size: 100
+  flush_batch_timeout: 10
+  max_segment_size: 10485760
+  data_directory: "/data/kv_db/wal"

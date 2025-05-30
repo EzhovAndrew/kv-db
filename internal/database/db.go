@@ -23,7 +23,7 @@ type Database struct {
 
 func NewDatabase(cfg *configuration.Config) (*Database, error) {
 	compute := compute.NewCompute()
-	storage, err := storage.NewStorage(&cfg.Engine)
+	storage, err := storage.NewStorage(cfg)
 	if err != nil {
 		return nil, err
 	}
