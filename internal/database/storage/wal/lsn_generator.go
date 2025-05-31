@@ -7,11 +7,11 @@ type LSNGenerator struct {
 }
 
 func NewLSNGenerator(lastLSN uint64) *LSNGenerator {
-	var lsn atomic.Uint64
+	g := &LSNGenerator{}
 	if lastLSN != 0 {
-		lsn.Store(lastLSN)
+		g.lsn.Store(lastLSN)
 	}
-	return &LSNGenerator{lsn: lsn}
+	return g
 }
 
 func (g *LSNGenerator) Next() uint64 {

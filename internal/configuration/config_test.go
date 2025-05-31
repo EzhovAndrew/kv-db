@@ -712,30 +712,29 @@ wal:
 	}
 }
 
-
 func TestNewConfig_WALMaxSegmentSizeValidation(t *testing.T) {
 	originalPath := os.Getenv("CONFIG_FILEPATH")
 	defer os.Setenv("CONFIG_FILEPATH", originalPath)
 
 	tests := []struct {
-		name           string
+		name             string
 		max_segment_size int
-		shouldError    bool
+		shouldError      bool
 	}{
 		{
-			name:           "valid max segment size",
+			name:             "valid max segment size",
 			max_segment_size: 10485760,
-			shouldError:    false,
+			shouldError:      false,
 		},
 		{
-			name:           "too small max segment size",
+			name:             "too small max segment size",
 			max_segment_size: 4095,
-			shouldError:    true,
+			shouldError:      true,
 		},
 		{
-			name:           "too big max segment size",
+			name:             "too big max segment size",
 			max_segment_size: 104857601,
-			shouldError:    true,
+			shouldError:      true,
 		},
 	}
 
@@ -789,24 +788,24 @@ func TestNewConfig_WALFlushBatchSizeValidation(t *testing.T) {
 	defer os.Setenv("CONFIG_FILEPATH", originalPath)
 
 	tests := []struct {
-		name           string
+		name             string
 		flush_batch_size int
-		shouldError    bool
+		shouldError      bool
 	}{
 		{
-			name:           "valid flush batch size",
+			name:             "valid flush batch size",
 			flush_batch_size: 100,
-			shouldError:    false,
+			shouldError:      false,
 		},
 		{
-			name:           "too small flush batch size",
+			name:             "too small flush batch size",
 			flush_batch_size: 4,
-			shouldError:    true,
+			shouldError:      true,
 		},
 		{
-			name:           "too big flush batch size",
+			name:             "too big flush batch size",
 			flush_batch_size: 1001,
-			shouldError:    true,
+			shouldError:      true,
 		},
 	}
 
@@ -860,24 +859,24 @@ func TestNewConfig_WALFlushBatchTimeoutValidation(t *testing.T) {
 	defer os.Setenv("CONFIG_FILEPATH", originalPath)
 
 	tests := []struct {
-		name           string
+		name                string
 		flush_batch_timeout int
-		shouldError    bool
+		shouldError         bool
 	}{
 		{
-			name:           "valid flush batch timeout",
+			name:                "valid flush batch timeout",
 			flush_batch_timeout: 10,
-			shouldError:    false,
+			shouldError:         false,
 		},
 		{
-			name:           "too small flush batch timeout",
+			name:                "too small flush batch timeout",
 			flush_batch_timeout: 4,
-			shouldError:    true,
+			shouldError:         true,
 		},
 		{
-			name:           "too big flush batch timeout",
+			name:                "too big flush batch timeout",
 			flush_batch_timeout: 1001,
-			shouldError:    true,
+			shouldError:         true,
 		},
 	}
 
@@ -925,7 +924,6 @@ wal:
 		})
 	}
 }
-
 
 func TestNewConfig_MissingSections(t *testing.T) {
 	originalPath := os.Getenv("CONFIG_FILEPATH")
