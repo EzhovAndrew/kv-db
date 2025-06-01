@@ -43,8 +43,8 @@ func NewWAL(cfg *configuration.WALConfig) *WAL {
 		lsnGenerator:  NewLSNGenerator(0),
 		newLogsChan:   make(chan NewLog),
 		shutdownChan:  make(chan struct{}),
-		logsWriter:    NewFileLogsWriter(cfg.DataDirectory),
-		logsReader:    NewFileLogsReader(cfg.DataDirectory),
+		logsWriter:    NewFileLogsWriter(cfg.DataDirectory, cfg.MaxSegmentSize),
+		logsReader:    NewFileLogsReader(cfg.DataDirectory, cfg.MaxSegmentSize),
 	}
 	go wal.handleNewLogs(cfg)
 	return wal
@@ -61,44 +61,46 @@ func (w *WAL) Recover() iter.Seq2[*Log, error] {
 }
 
 func (w *WAL) handleNewLogs(cfg *configuration.WALConfig) {
-	for {
-		timer := time.NewTimer(time.Duration(cfg.FlushBatchTimeout))
-		defer timer.Stop()
-	INNER:
-		for {
-			select {
-			case <-w.shutdownChan:
-				w.flushToDisk()
-				return
-			default:
-			}
-
-			// Prioritization of timeout
-			select {
-			case <-timer.C:
-				w.flushToDisk()
-				w.sendResponses()
-				break INNER
-			default:
-			}
-
-			select {
-			case newLog := <-w.newLogsChan:
-				w.batch = append(w.batch, newLog.log)
-				w.responseChans = append(w.responseChans, newLog.responseChan)
-				if len(w.batch) == cfg.FlushBatchSize {
-					w.flushToDisk()
-					w.sendResponses()
-				}
-				break INNER
-			case <-timer.C:
-				w.flushToDisk()
-				w.sendResponses()
-				break INNER
-			}
-		}
+	flushTimeout := time.Duration(cfg.FlushBatchTimeout)
+	timer := time.NewTimer(flushTimeout)
+	defer timer.Stop()
+	
+	// Initially stop the timer since we have no logs to flush
+	if !timer.Stop() {
+		<-timer.C
 	}
 
+	for {
+		select {
+		case <-w.shutdownChan:
+			w.flushToDisk()
+			return
+
+		case newLog := <-w.newLogsChan:
+			if len(w.batch) == 0 {
+				timer.Reset(flushTimeout)
+			}
+			
+			w.batch = append(w.batch, newLog.log)
+			w.responseChans = append(w.responseChans, newLog.responseChan)
+
+			if len(w.batch) >= cfg.FlushBatchSize {
+				// Stop timer and drain if necessary
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				w.flushToDisk()
+				w.sendResponses()
+			}
+
+		case <-timer.C:
+			w.flushToDisk()
+			w.sendResponses()
+		}
+	}
 }
 
 func (w *WAL) flushToDisk() {

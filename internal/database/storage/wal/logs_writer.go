@@ -20,8 +20,8 @@ type FileLogsWriter struct {
 	buf        *bytes.Buffer
 }
 
-func NewFileLogsWriter(dataDir string) *FileLogsWriter {
-	fileSystem := filesystem.NewSegmentedFileSystem(dataDir)
+func NewFileLogsWriter(dataDir string, maxSegmentSize int) *FileLogsWriter {
+	fileSystem := filesystem.NewSegmentedFileSystem(dataDir, maxSegmentSize)
 	buf := &bytes.Buffer{}
 	buf.Grow(9192)
 	return &FileLogsWriter{filesystem: fileSystem, buf: buf}

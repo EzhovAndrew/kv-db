@@ -30,8 +30,8 @@ type FileLogsReader struct {
 	filesystem FileSystemReader
 }
 
-func NewFileLogsReader(dataDir string) *FileLogsReader {
-	fileSystem := filesystem.NewSegmentedFileSystem(dataDir)
+func NewFileLogsReader(dataDir string, maxSegmentSize int) *FileLogsReader {
+	fileSystem := filesystem.NewSegmentedFileSystem(dataDir, maxSegmentSize)
 	return &FileLogsReader{filesystem: fileSystem}
 }
 
@@ -44,8 +44,17 @@ func (l *FileLogsReader) Read() iter.Seq2[*Log, error] {
 				}
 				continue
 			}
-			if !yield(l.decodeLog(data)) {
+			if len(data) == 0 {
 				return
+			}
+			for {
+				log, err := l.decodeLog(data)
+				if err == io.EOF {
+					break
+				}
+				if !yield(log, err) {
+					return
+				}
 			}
 		}
 	}
