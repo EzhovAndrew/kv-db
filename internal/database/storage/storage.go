@@ -27,7 +27,7 @@ type Engine interface {
 }
 
 type WAL interface {
-	Recover() iter.Seq2[wal.Log, error]
+	Recover() iter.Seq2[*wal.Log, error]
 	Set(key string, value string) uint64
 	Delete(key string) uint64
 	Shutdown()

@@ -1,7 +1,6 @@
 package wal
 
 import (
-	"context"
 	"iter"
 	"time"
 
@@ -21,7 +20,7 @@ type LogsWriter interface {
 }
 
 type LogsReader interface {
-	Read() iter.Seq2[Log, error]
+	Read() iter.Seq2[*Log, error]
 }
 
 type WAL struct {
@@ -51,8 +50,8 @@ func NewWAL(cfg *configuration.WALConfig) *WAL {
 	return wal
 }
 
-func (w *WAL) Recover() iter.Seq2[Log, error] {
-	return func(yield func(Log, error) bool) {
+func (w *WAL) Recover() iter.Seq2[*Log, error] {
+	return func(yield func(*Log, error) bool) {
 		for log, err := range w.logsReader.Read() {
 			if !yield(log, err) {
 				return
@@ -63,8 +62,8 @@ func (w *WAL) Recover() iter.Seq2[Log, error] {
 
 func (w *WAL) handleNewLogs(cfg *configuration.WALConfig) {
 	for {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.FlushBatchTimeout))
-		defer cancel()
+		timer := time.NewTimer(time.Duration(cfg.FlushBatchTimeout))
+		defer timer.Stop()
 	INNER:
 		for {
 			select {
@@ -76,7 +75,7 @@ func (w *WAL) handleNewLogs(cfg *configuration.WALConfig) {
 
 			// Prioritization of timeout
 			select {
-			case <-ctx.Done():
+			case <-timer.C:
 				w.flushToDisk()
 				w.sendResponses()
 				break INNER
@@ -91,9 +90,8 @@ func (w *WAL) handleNewLogs(cfg *configuration.WALConfig) {
 					w.flushToDisk()
 					w.sendResponses()
 				}
-				cancel()
 				break INNER
-			case <-ctx.Done():
+			case <-timer.C:
 				w.flushToDisk()
 				w.sendResponses()
 				break INNER
