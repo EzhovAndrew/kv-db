@@ -14,6 +14,7 @@ type Storage interface {
 	Get(ctx context.Context, key string) (string, error)
 	Set(ctx context.Context, key, value string) error
 	Delete(ctx context.Context, key string) error
+	Shutdown()
 }
 
 type Database struct {
@@ -23,7 +24,7 @@ type Database struct {
 
 func NewDatabase(cfg *configuration.Config) (*Database, error) {
 	compute := compute.NewCompute()
-	storage, err := storage.NewStorage(&cfg.Engine)
+	storage, err := storage.NewStorage(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -74,4 +75,8 @@ func (db *Database) HandleDelRequest(ctx context.Context, query compute.Query) [
 		return []byte(err.Error())
 	}
 	return []byte("OK")
+}
+
+func (db *Database) Shutdown() {
+	db.storage.Shutdown()
 }

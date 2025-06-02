@@ -1,12 +1,15 @@
 package concurrency
 
-import "sync"
+import (
+	"errors"
+	"sync"
+)
 
-func WithLock(lock sync.Locker, fn func()) {
+func WithLock(lock sync.Locker, fn func() error) error {
 	if fn == nil {
-		return
+		return errors.New("nil function")
 	}
 	lock.Lock()
 	defer lock.Unlock()
-	fn()
+	return fn()
 }

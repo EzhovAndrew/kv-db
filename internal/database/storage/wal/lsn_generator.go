@@ -1,0 +1,19 @@
+package wal
+
+import "sync/atomic"
+
+type LSNGenerator struct {
+	lsn atomic.Uint64
+}
+
+func NewLSNGenerator(lastLSN uint64) *LSNGenerator {
+	g := &LSNGenerator{}
+	if lastLSN != 0 {
+		g.lsn.Store(lastLSN)
+	}
+	return g
+}
+
+func (g *LSNGenerator) Next() uint64 {
+	return g.lsn.Add(1)
+}
