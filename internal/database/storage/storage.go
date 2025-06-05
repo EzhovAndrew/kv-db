@@ -31,6 +31,7 @@ type WAL interface {
 	Set(key string, value string) uint64
 	Delete(key string) uint64
 	Shutdown()
+	SetLastLSN(lsn uint64)
 }
 
 type Storage struct {
@@ -124,6 +125,7 @@ func (s *Storage) recover() error {
 		lastAppliedLSN = log.LSN
 	}
 	s.engine.SetCurrentAppliedLSN(lastAppliedLSN)
+	s.wal.SetLastLSN(lastAppliedLSN)
 	s.engine.EnableLSNOrdering()
 	return nil
 }

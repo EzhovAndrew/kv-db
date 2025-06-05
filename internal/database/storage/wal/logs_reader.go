@@ -45,14 +45,11 @@ func (l *FileLogsReader) Read() iter.Seq2[*Log, error] {
 				continue
 			}
 			if len(data) == 0 {
-				return
+				continue
 			}
-			for {
-				log, err := l.decodeLog(data)
-				if err == io.EOF {
-					break
-				}
-				if !yield(log, err) {
+
+			if err := l.processData(data, yield); err != nil {
+				if !yield(nil, err) {
 					return
 				}
 			}
@@ -60,28 +57,57 @@ func (l *FileLogsReader) Read() iter.Seq2[*Log, error] {
 	}
 }
 
-func (l *FileLogsReader) decodeLog(data []byte) (*Log, error) {
+func (l *FileLogsReader) processData(data []byte, yield func(*Log, error) bool) error {
 	buf := bytes.NewReader(data)
+
+	for buf.Len() > 0 {
+		log, bytesRead, err := l.decodeLog(buf)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		if bytesRead == 0 {
+			// Prevent infinite loop if no bytes were consumed
+			logging.Error("No bytes consumed during log decoding, stopping to prevent infinite loop")
+			break
+		}
+
+		if !yield(log, nil) {
+			return nil // Consumer wants to stop
+		}
+	}
+
+	return nil
+}
+
+// decodeLog decodes a single log entry from the reader and returns the log, bytes read, and any error
+func (l *FileLogsReader) decodeLog(buf *bytes.Reader) (*Log, int, error) {
+	initialPos := buf.Len()
 	entry := &Log{}
 
 	lsn, err := binary.ReadUvarint(buf)
 	if err != nil {
+		if err == io.EOF {
+			return nil, 0, err
+		}
 		logging.Error("Failed to decode LSN", zap.Error(err))
-		return nil, ErrDecodeLSN
+		return nil, 0, ErrDecodeLSN
 	}
 	entry.LSN = lsn
 
 	cmdID, err := binary.ReadUvarint(buf)
 	if err != nil {
 		logging.Error("Failed to decode CmdID", zap.Error(err))
-		return nil, ErrDecodeCmdID
+		return nil, 0, ErrDecodeCmdID
 	}
 	entry.Command = int(cmdID)
 
 	numArgs, err := binary.ReadUvarint(buf)
 	if err != nil {
 		logging.Error("Failed to decode number of arguments", zap.Error(err))
-		return nil, ErrDecodeArgumentsNum
+		return nil, 0, ErrDecodeArgumentsNum
 	}
 
 	entry.Arguments = make([]string, numArgs)
@@ -89,20 +115,22 @@ func (l *FileLogsReader) decodeLog(data []byte) (*Log, error) {
 		argLen, err := binary.ReadUvarint(buf)
 		if err != nil {
 			logging.Error("Failed to decode argument length", zap.Error(err))
-			return nil, ErrDecodeArgumentLen
+			return nil, 0, ErrDecodeArgumentLen
 		}
+
 		arg := make([]byte, argLen)
 		n, err := io.ReadFull(buf, arg)
 		if err != nil {
 			logging.Error("Failed to read argument data", zap.Error(err))
-			return nil, ErrDecodeArgument
+			return nil, 0, ErrDecodeArgument
 		}
 		if uint64(n) != argLen {
-			logging.Error("Unexpected EOF reading argument data", zap.Error(err))
-			return nil, ErrDecodeArgument
+			logging.Error("Unexpected EOF reading argument data")
+			return nil, 0, ErrDecodeArgument
 		}
 		entry.Arguments[i] = utils.BytesToString(arg)
 	}
 
-	return entry, nil
+	bytesRead := initialPos - buf.Len()
+	return entry, bytesRead, nil
 }

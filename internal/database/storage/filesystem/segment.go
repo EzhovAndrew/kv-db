@@ -1,6 +1,9 @@
 package filesystem
 
-import "os"
+import (
+	"fmt"
+	"os"
+)
 
 type Segment struct {
 	FileName    string
@@ -15,12 +18,26 @@ func NewSegment(fileName string) *Segment {
 }
 
 func (s *Segment) open() error {
-	fd, err := os.OpenFile(s.FileName, os.O_CREATE|os.O_APPEND, 0644)
+	fd, err := os.OpenFile(s.FileName, os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to open file %s: %w", s.FileName, err)
+	}
+	s.fd = fd
+	s.currentSize = 0
+	return nil
+}
+
+func (s *Segment) openForAppend() error {
+	fd, err := os.OpenFile(s.FileName, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open file %s for append: %w", s.FileName, err)
 	}
 	s.fd = fd
 	return nil
+}
+
+func (s *Segment) setCurrentSize(size int) {
+	s.currentSize = size
 }
 
 func (s *Segment) checkOverflow(maxSize, dataSize int) bool {
@@ -29,27 +46,29 @@ func (s *Segment) checkOverflow(maxSize, dataSize int) bool {
 
 func (s *Segment) writeSync(data []byte) error {
 	if s.fd == nil {
-		return os.ErrClosed
+		return fmt.Errorf("segment file is not open")
 	}
-	_, err := s.fd.Write(data)
+
+	n, err := s.fd.Write(data)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to write data: %w", err)
 	}
-	err = s.fd.Sync()
-	if err != nil {
-		return err
+
+	if err := s.fd.Sync(); err != nil {
+		return fmt.Errorf("failed to sync data: %w", err)
 	}
-	s.currentSize += len(data)
+
+	s.currentSize += n
 	return nil
 }
 
 func (s *Segment) close() error {
 	if s.fd == nil {
-		return os.ErrClosed
+		return nil // Already closed
 	}
 	err := s.fd.Close()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to close file %s: %w", s.FileName, err)
 	}
 	s.fd = nil
 	return nil

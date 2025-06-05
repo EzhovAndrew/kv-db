@@ -60,11 +60,15 @@ func (w *WAL) Recover() iter.Seq2[*Log, error] {
 	}
 }
 
+func (w *WAL) SetLastLSN(lsn uint64) {
+	w.lsnGenerator.ResetToLSN(lsn)
+}
+
 func (w *WAL) handleNewLogs(cfg *configuration.WALConfig) {
 	flushTimeout := time.Duration(cfg.FlushBatchTimeout)
 	timer := time.NewTimer(flushTimeout)
 	defer timer.Stop()
-	
+
 	// Initially stop the timer since we have no logs to flush
 	if !timer.Stop() {
 		<-timer.C
@@ -80,12 +84,13 @@ func (w *WAL) handleNewLogs(cfg *configuration.WALConfig) {
 			if len(w.batch) == 0 {
 				timer.Reset(flushTimeout)
 			}
-			
+
 			w.batch = append(w.batch, newLog.log)
 			w.responseChans = append(w.responseChans, newLog.responseChan)
 
 			if len(w.batch) >= cfg.FlushBatchSize {
 				// Stop timer and drain if necessary
+				// This is important for correct timeout behavior
 				if !timer.Stop() {
 					select {
 					case <-timer.C:

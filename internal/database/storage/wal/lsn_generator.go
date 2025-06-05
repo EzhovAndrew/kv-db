@@ -14,6 +14,10 @@ func NewLSNGenerator(lastLSN uint64) *LSNGenerator {
 	return g
 }
 
+func (g *LSNGenerator) ResetToLSN(lsn uint64) {
+	g.lsn.Store(lsn)
+}
+
 func (g *LSNGenerator) Next() uint64 {
 	return g.lsn.Add(1)
 }

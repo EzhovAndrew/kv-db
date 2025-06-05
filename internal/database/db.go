@@ -7,7 +7,6 @@ import (
 	"github.com/EzhovAndrew/kv-db/internal/database/compute"
 	"github.com/EzhovAndrew/kv-db/internal/database/storage"
 	"github.com/EzhovAndrew/kv-db/internal/logging"
-	"github.com/EzhovAndrew/kv-db/internal/utils"
 )
 
 type Storage interface {
@@ -36,7 +35,7 @@ func (db *Database) Start(ctx context.Context) error {
 }
 
 func (db *Database) HandleRequest(ctx context.Context, data []byte) []byte {
-	query, err := db.compute.Parse(utils.BytesToString(data))
+	query, err := db.compute.Parse(string(data))
 	if err != nil {
 		return []byte(err.Error())
 	}
