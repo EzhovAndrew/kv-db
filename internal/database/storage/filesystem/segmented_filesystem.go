@@ -116,10 +116,6 @@ func (fs *SegmentedFileSystem) WriteSync(data []byte) error {
 
 func (fs *SegmentedFileSystem) ReadAll() iter.Seq2[[]byte, error] {
 	return func(yield func([]byte, error) bool) {
-		defer func() {
-			// clean up unneccessary memory
-			fs.walFiles = nil
-		}()
 		for _, filename := range fs.walFiles {
 			filePath := filepath.Join(fs.dataDir, filename)
 			data, err := os.ReadFile(filePath)
@@ -183,6 +179,7 @@ func (fs *SegmentedFileSystem) rotateSegment() error {
 		return err
 	}
 	fs.currentSegment = newSegment
+	fs.walFiles = append(fs.walFiles, newFileName)
 	return nil
 }
 
