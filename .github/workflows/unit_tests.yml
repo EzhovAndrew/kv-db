@@ -20,5 +20,8 @@ jobs:
       - name: Install dependencies
         run: go mod tidy
 
+      - name: install gotestsum
+        run: go install gotest.tools/gotestsum@v1.12.2
+
       - name: Run tests
         run: bash unit_tests.sh
