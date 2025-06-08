@@ -19,7 +19,8 @@ func TestNewSegmentedFileSystem_EmptyDirectory(t *testing.T) {
 	assert.Equal(t, tempDir, fs.dataDir)
 	assert.Equal(t, 1024, fs.maxSegmentSize)
 	assert.NotNil(t, fs.currentSegment)
-	assert.Empty(t, fs.walFiles)
+	assert.NotEmpty(t, fs.walFiles)
+	assert.Equal(t, 0, fs.currentSegment.currentSize)
 }
 
 func TestNewSegmentedFileSystem_WithExistingSmallWALFile(t *testing.T) {

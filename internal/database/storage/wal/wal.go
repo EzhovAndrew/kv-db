@@ -34,6 +34,7 @@ type WAL struct {
 	lsnGenerator *LSNGenerator
 
 	shutdownChan chan struct{}
+	closed       bool
 }
 
 func NewWAL(cfg *configuration.WALConfig) *WAL {
@@ -124,6 +125,10 @@ func (w *WAL) flushToDisk() {
 }
 
 func (w *WAL) Shutdown() {
+	if w.closed {
+		return
+	}
+	w.closed = true
 	close(w.shutdownChan)
 }
 
