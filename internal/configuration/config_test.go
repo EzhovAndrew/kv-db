@@ -71,7 +71,7 @@ invalid_yaml_syntax: [unclosed bracket
 	assert.Nil(t, config)
 }
 
-func TestNewConfig_ValidConfiguration(t *testing.T) {
+func TestNewConfig_ValidConfigurationNoWAL(t *testing.T) {
 	originalPath := os.Getenv("CONFIG_FILEPATH")
 	defer os.Setenv("CONFIG_FILEPATH", originalPath)
 
@@ -111,6 +111,59 @@ network:
 	assert.Equal(t, 1024, config.Network.MaxMessageSize)
 	assert.Equal(t, 30, config.Network.IdleTimeout)
 	assert.Equal(t, 5, config.Network.GracefulShutdownTimeout)
+	assert.Nil(t, config.WAL)
+}
+
+func TestNewConfig_ValidConfigurationWithWAL(t *testing.T) {
+	originalPath := os.Getenv("CONFIG_FILEPATH")
+	defer os.Setenv("CONFIG_FILEPATH", originalPath)
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "valid.yaml")
+
+	validYAML := `
+engine:
+  type: in_memory
+logging:
+  level: info
+  output: stdout
+network:
+  ip: 127.0.0.1
+  port: 8080
+  max_connections: 100
+  max_message_size: 1024
+  idle_timeout: 30
+  graceful_shutdown_timeout: 5
+wal:
+  flush_batch_size: 100
+  flush_batch_timeout: 10
+  max_segment_size: 10485760
+  data_directory: "/data/kv_db/wal"
+`
+
+	err := os.WriteFile(configFile, []byte(validYAML), 0644)
+	require.NoError(t, err)
+
+	os.Setenv("CONFIG_FILEPATH", configFile)
+
+	config, err := NewConfig()
+
+	assert.NoError(t, err)
+	assert.NotNil(t, config)
+	assert.Equal(t, "in_memory", config.Engine.Type)
+	assert.Equal(t, "info", config.Logging.Level)
+	assert.Equal(t, "stdout", config.Logging.Output)
+	assert.Equal(t, "127.0.0.1", config.Network.Ip)
+	assert.Equal(t, "8080", config.Network.Port)
+	assert.Equal(t, 100, config.Network.MaxConnections)
+	assert.Equal(t, 1024, config.Network.MaxMessageSize)
+	assert.Equal(t, 30, config.Network.IdleTimeout)
+	assert.Equal(t, 5, config.Network.GracefulShutdownTimeout)
+	assert.NotNil(t, config.WAL)
+	assert.Equal(t, 100, config.WAL.FlushBatchSize)
+	assert.Equal(t, 10, config.WAL.FlushBatchTimeout)
+	assert.Equal(t, 10485760, config.WAL.MaxSegmentSize)
+	assert.Equal(t, "/data/kv_db/wal", config.WAL.DataDirectory)
 }
 
 func TestNewConfig_EngineValidation(t *testing.T) {
@@ -588,6 +641,285 @@ network:
 				assert.NotNil(t, config)
 				assert.Equal(t, tt.idleTimeout, config.Network.IdleTimeout)
 				assert.Equal(t, tt.gracefulShutdownTimeout, config.Network.GracefulShutdownTimeout)
+			}
+		})
+	}
+}
+
+func TestNewConfig_WALPathValidation(t *testing.T) {
+	originalPath := os.Getenv("CONFIG_FILEPATH")
+	defer os.Setenv("CONFIG_FILEPATH", originalPath)
+
+	tests := []struct {
+		name           string
+		data_directory string
+		shouldError    bool
+	}{
+		{
+			name:           "valid WAL path",
+			data_directory: "/path/to/wal",
+			shouldError:    false,
+		},
+		{
+			name:           "empty WAL path",
+			data_directory: "",
+			shouldError:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			configFile := filepath.Join(tmpDir, "config.yaml")
+			yamlContent := `
+engine:
+  type: "in_memory"
+network:
+  ip: "127.0.0.1"
+  port: 3223
+  max_connections: 100
+  max_message_size: 4096
+  idle_timeout: 300
+  graceful_shutdown_timeout: 5
+logging:
+  level: "info"
+  output: "stdout"
+wal:
+  data_directory: ` + tt.data_directory + `
+  flush_batch_size: 100
+  flush_batch_timeout: 10
+  max_segment_size: 1048576
+`
+			err := os.WriteFile(configFile, []byte(yamlContent), 0644)
+			require.NoError(t, err)
+
+			os.Setenv("CONFIG_FILEPATH", configFile)
+
+			config, err := NewConfig()
+
+			if tt.shouldError {
+				assert.Error(t, err)
+				assert.Nil(t, config)
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, config)
+				assert.Equal(t, tt.data_directory, config.WAL.DataDirectory)
+				assert.Equal(t, 100, config.WAL.FlushBatchSize)
+				assert.Equal(t, 10, config.WAL.FlushBatchTimeout)
+				assert.Equal(t, 1048576, config.WAL.MaxSegmentSize)
+			}
+		})
+	}
+}
+
+func TestNewConfig_WALMaxSegmentSizeValidation(t *testing.T) {
+	originalPath := os.Getenv("CONFIG_FILEPATH")
+	defer os.Setenv("CONFIG_FILEPATH", originalPath)
+
+	tests := []struct {
+		name             string
+		max_segment_size int
+		shouldError      bool
+	}{
+		{
+			name:             "valid max segment size",
+			max_segment_size: 10485760,
+			shouldError:      false,
+		},
+		{
+			name:             "too small max segment size",
+			max_segment_size: 4095,
+			shouldError:      true,
+		},
+		{
+			name:             "too big max segment size",
+			max_segment_size: 104857601,
+			shouldError:      true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			configFile := filepath.Join(tmpDir, "config.yaml")
+			yamlContent := `
+engine:
+  type: "in_memory"
+network:
+  ip: "127.0.0.1"
+  port: 3223
+  max_connections: 100
+  max_message_size: 4096
+  idle_timeout: 300
+  graceful_shutdown_timeout: 5
+logging:
+  level: "info"
+  output: "stdout"
+wal:
+  data_directory: /data/kv_db/wal
+  flush_batch_size: 100
+  flush_batch_timeout: 10
+  max_segment_size: ` + strconv.Itoa(tt.max_segment_size) + `
+`
+			err := os.WriteFile(configFile, []byte(yamlContent), 0644)
+			require.NoError(t, err)
+
+			os.Setenv("CONFIG_FILEPATH", configFile)
+
+			config, err := NewConfig()
+
+			if tt.shouldError {
+				assert.Error(t, err)
+				assert.Nil(t, config)
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, config)
+				assert.Equal(t, tt.max_segment_size, config.WAL.MaxSegmentSize)
+				assert.Equal(t, 100, config.WAL.FlushBatchSize)
+				assert.Equal(t, 10, config.WAL.FlushBatchTimeout)
+				assert.Equal(t, "/data/kv_db/wal", config.WAL.DataDirectory)
+			}
+		})
+	}
+}
+
+func TestNewConfig_WALFlushBatchSizeValidation(t *testing.T) {
+	originalPath := os.Getenv("CONFIG_FILEPATH")
+	defer os.Setenv("CONFIG_FILEPATH", originalPath)
+
+	tests := []struct {
+		name             string
+		flush_batch_size int
+		shouldError      bool
+	}{
+		{
+			name:             "valid flush batch size",
+			flush_batch_size: 100,
+			shouldError:      false,
+		},
+		{
+			name:             "too small flush batch size",
+			flush_batch_size: 4,
+			shouldError:      true,
+		},
+		{
+			name:             "too big flush batch size",
+			flush_batch_size: 1001,
+			shouldError:      true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			configFile := filepath.Join(tmpDir, "config.yaml")
+			yamlContent := `
+engine:
+  type: "in_memory"
+network:
+  ip: "127.0.0.1"
+  port: 3223
+  max_connections: 100
+  max_message_size: 4096
+  idle_timeout: 300
+  graceful_shutdown_timeout: 5
+logging:
+  level: "info"
+  output: "stdout"
+wal:
+  data_directory: /data/kv_db/wal
+  flush_batch_size: ` + strconv.Itoa(tt.flush_batch_size) + `
+  flush_batch_timeout: 10
+  max_segment_size: 10485760
+`
+			err := os.WriteFile(configFile, []byte(yamlContent), 0644)
+			require.NoError(t, err)
+
+			os.Setenv("CONFIG_FILEPATH", configFile)
+
+			config, err := NewConfig()
+
+			if tt.shouldError {
+				assert.Error(t, err)
+				assert.Nil(t, config)
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, config)
+				assert.Equal(t, tt.flush_batch_size, config.WAL.FlushBatchSize)
+				assert.Equal(t, 10485760, config.WAL.MaxSegmentSize)
+				assert.Equal(t, 10, config.WAL.FlushBatchTimeout)
+				assert.Equal(t, "/data/kv_db/wal", config.WAL.DataDirectory)
+			}
+		})
+	}
+}
+
+func TestNewConfig_WALFlushBatchTimeoutValidation(t *testing.T) {
+	originalPath := os.Getenv("CONFIG_FILEPATH")
+	defer os.Setenv("CONFIG_FILEPATH", originalPath)
+
+	tests := []struct {
+		name                string
+		flush_batch_timeout int
+		shouldError         bool
+	}{
+		{
+			name:                "valid flush batch timeout",
+			flush_batch_timeout: 10,
+			shouldError:         false,
+		},
+		{
+			name:                "too small flush batch timeout",
+			flush_batch_timeout: 4,
+			shouldError:         true,
+		},
+		{
+			name:                "too big flush batch timeout",
+			flush_batch_timeout: 1001,
+			shouldError:         true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			configFile := filepath.Join(tmpDir, "config.yaml")
+			yamlContent := `
+engine:
+  type: "in_memory"
+network:
+  ip: "127.0.0.1"
+  port: 3223
+  max_connections: 100
+  max_message_size: 4096
+  idle_timeout: 300
+  graceful_shutdown_timeout: 5
+logging:
+  level: "info"
+  output: "stdout"
+wal:
+  data_directory: /data/kv_db/wal
+  flush_batch_size: 100
+  flush_batch_timeout: ` + strconv.Itoa(tt.flush_batch_timeout) + `
+  max_segment_size: 10485760
+`
+			err := os.WriteFile(configFile, []byte(yamlContent), 0644)
+			require.NoError(t, err)
+
+			os.Setenv("CONFIG_FILEPATH", configFile)
+
+			config, err := NewConfig()
+
+			if tt.shouldError {
+				assert.Error(t, err)
+				assert.Nil(t, config)
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, config)
+				assert.Equal(t, tt.flush_batch_timeout, config.WAL.FlushBatchTimeout)
+				assert.Equal(t, 100, config.WAL.FlushBatchSize)
+				assert.Equal(t, 10485760, config.WAL.MaxSegmentSize)
+				assert.Equal(t, "/data/kv_db/wal", config.WAL.DataDirectory)
 			}
 		})
 	}

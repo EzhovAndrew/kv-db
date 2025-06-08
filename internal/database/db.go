@@ -7,13 +7,13 @@ import (
 	"github.com/EzhovAndrew/kv-db/internal/database/compute"
 	"github.com/EzhovAndrew/kv-db/internal/database/storage"
 	"github.com/EzhovAndrew/kv-db/internal/logging"
-	"github.com/EzhovAndrew/kv-db/internal/utils"
 )
 
 type Storage interface {
 	Get(ctx context.Context, key string) (string, error)
 	Set(ctx context.Context, key, value string) error
 	Delete(ctx context.Context, key string) error
+	Shutdown()
 }
 
 type Database struct {
@@ -23,7 +23,7 @@ type Database struct {
 
 func NewDatabase(cfg *configuration.Config) (*Database, error) {
 	compute := compute.NewCompute()
-	storage, err := storage.NewStorage(&cfg.Engine)
+	storage, err := storage.NewStorage(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -35,7 +35,7 @@ func (db *Database) Start(ctx context.Context) error {
 }
 
 func (db *Database) HandleRequest(ctx context.Context, data []byte) []byte {
-	query, err := db.compute.Parse(utils.BytesToString(data))
+	query, err := db.compute.Parse(string(data))
 	if err != nil {
 		return []byte(err.Error())
 	}
@@ -74,4 +74,8 @@ func (db *Database) HandleDelRequest(ctx context.Context, query compute.Query) [
 		return []byte(err.Error())
 	}
 	return []byte("OK")
+}
+
+func (db *Database) Shutdown() {
+	db.storage.Shutdown()
 }

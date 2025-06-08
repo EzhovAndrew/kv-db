@@ -12,9 +12,19 @@ import (
 
 var ErrConfigIsNil = errors.New("config is nil")
 
+type Database interface {
+	Start(ctx context.Context) error
+	HandleRequest(ctx context.Context, data []byte) []byte
+	Shutdown()
+}
+
+type TCPServer interface {
+	HandleRequests(ctx context.Context, handler network.TCPHandler)
+}
+
 type Initializer struct {
-	server *network.TCPServer
-	db     *database.Database
+	server TCPServer
+	db     Database
 }
 
 func NewInitializer(cfg *configuration.Config) (*Initializer, error) {
@@ -41,6 +51,7 @@ func (i *Initializer) StartDatabase(ctx context.Context) error {
 	if err := i.db.Start(ctx); err != nil {
 		return err
 	}
+	defer i.db.Shutdown()
 	logging.Info("Database started")
 	i.server.HandleRequests(ctx, i.db.HandleRequest)
 	return nil

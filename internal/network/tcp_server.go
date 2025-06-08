@@ -123,7 +123,7 @@ func (s *TCPServer) handleConnection(ctx context.Context, conn net.Conn, handler
 		default:
 			err := conn.SetReadDeadline(time.Now().Add(time.Second * time.Duration(s.cfg.IdleTimeout)))
 			if err != nil {
-				logging.Error("unable to set read deadline", zap.Error(err))
+				logging.Warn("unable to set read deadline", zap.Error(err))
 				return
 			}
 		}
@@ -132,21 +132,21 @@ func (s *TCPServer) handleConnection(ctx context.Context, conn net.Conn, handler
 			if errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF) {
 				return
 			}
-			logging.Error("unable to read from connection", zap.Error(err))
+			logging.Warn("unable to read from connection", zap.Error(err))
 			return
 		}
 		if count == s.cfg.MaxMessageSize+1 {
-			logging.Error("message size exceeds limit")
+			logging.Warn("message size exceeds limit")
 			return
 		}
 
 		response := handler(ctx, (*buffer)[:count])
 		if err = conn.SetWriteDeadline(time.Now().Add(time.Second * time.Duration(s.cfg.IdleTimeout))); err != nil {
-			logging.Error("unable to set write deadline", zap.Error(err))
+			logging.Warn("unable to set write deadline", zap.Error(err))
 			return
 		}
 		if _, err = conn.Write(response); err != nil {
-			logging.Error(
+			logging.Warn(
 				"unable to write to connection",
 				zap.String("address", conn.RemoteAddr().String()), zap.Error(err),
 			)
