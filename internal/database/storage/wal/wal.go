@@ -157,3 +157,18 @@ func (w *WAL) Delete(key string) uint64 {
 	<-responseChan
 	return lsn
 }
+
+// for replication purposes
+func (w *WAL) GetLastLSN() uint64 {
+	return w.lsnGenerator.Current()
+}
+
+func (w *WAL) WriteLogs(logs []*Log) error {
+	if len(logs) == 0 {
+		return nil
+	}
+	if err := w.logsWriter.Write(logs); err != nil {
+		return err
+	}
+	return nil
+}

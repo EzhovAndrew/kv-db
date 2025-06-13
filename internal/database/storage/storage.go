@@ -32,6 +32,10 @@ type WAL interface {
 	Delete(key string) uint64
 	Shutdown()
 	SetLastLSN(lsn uint64)
+
+	// for replication purposes
+	GetLastLSN() uint64
+	WriteLogs(logs []*wal.Log) error
 }
 
 type Storage struct {
@@ -97,7 +101,26 @@ func (s *Storage) Delete(ctx context.Context, key string) error {
 }
 
 func (s *Storage) Shutdown() {
+	if s.wal == nil {
+		return
+	}
 	s.wal.Shutdown()
+}
+
+func (s *Storage) applyLogToEngine(log *wal.Log) error {
+	switch log.Command {
+	case compute.SetCommandID:
+		err := s.engine.Set(context.Background(), log.Arguments[0], log.Arguments[1])
+		if err != nil {
+			return err
+		}
+	case compute.DelCommandID:
+		err := s.engine.Delete(context.Background(), log.Arguments[0])
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Storage) recover() error {
@@ -110,17 +133,9 @@ func (s *Storage) recover() error {
 		if err != nil {
 			return err
 		}
-		switch log.Command {
-		case compute.SetCommandID:
-			err := s.engine.Set(context.Background(), log.Arguments[0], log.Arguments[1])
-			if err != nil {
-				return err
-			}
-		case compute.DelCommandID:
-			err := s.engine.Delete(context.Background(), log.Arguments[0])
-			if err != nil {
-				return err
-			}
+		err := s.applyLogToEngine(log)
+		if err != nil {
+			return err
 		}
 		lastAppliedLSN = log.LSN
 	}
@@ -128,4 +143,24 @@ func (s *Storage) recover() error {
 	s.wal.SetLastLSN(lastAppliedLSN)
 	s.engine.EnableLSNOrdering()
 	return nil
+}
+
+
+// for replication purposes
+func (s *Storage) ApplyLogs(logs []*wal.Log) error {
+	s.engine.DisableLSNOrdering()
+	if err := s.wal.WriteLogs(logs); err != nil {
+		return err
+	}
+	for _, log := range logs {
+		err := s.applyLogToEngine(log)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Storage) GetLastLSN() uint64 {
+	return s.wal.GetLastLSN()
 }
