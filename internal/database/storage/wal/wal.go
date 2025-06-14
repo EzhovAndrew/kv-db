@@ -1,6 +1,7 @@
 package wal
 
 import (
+	"context"
 	"iter"
 	"time"
 
@@ -21,6 +22,7 @@ type LogsWriter interface {
 
 type LogsReader interface {
 	Read() iter.Seq2[*Log, error]
+	ReadFromLSN(ctx, lsn uint64) iter.Seq2[*Log, error]
 }
 
 type WAL struct {
@@ -156,4 +158,30 @@ func (w *WAL) Delete(key string) uint64 {
 	w.newLogsChan <- NewLog{log: log, responseChan: responseChan}
 	<-responseChan
 	return lsn
+}
+
+// for REPLICATION purposes
+
+func (w *WAL) GetLastLSN() uint64 {
+	return w.lsnGenerator.Current()
+}
+
+func (w *WAL) WriteLogs(logs []*Log) error {
+	if len(logs) == 0 {
+		return nil
+	}
+	if err := w.logsWriter.Write(logs); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (w *WAL) ReadLogsFromLSN(ctx context.Context, lsn uint64) iter.Seq2[*Log, error] {
+	return func(yield func(*Log, error) bool) {
+		for log, err := range w.logsReader.ReadFromLSN(ctx, lsn) {
+			if !yield(log, err) {
+				return
+			}
+		}
+	}
 }

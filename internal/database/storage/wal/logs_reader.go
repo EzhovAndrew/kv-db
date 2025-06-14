@@ -2,6 +2,7 @@ package wal
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -24,6 +25,8 @@ var (
 
 type FileSystemReader interface {
 	ReadAll() iter.Seq2[[]byte, error]
+	GetSegmentForLSN(lsn uint64) (int, error)
+	ReadContinuouslyFromSegment(segment int) iter.Seq2[[]byte, error]
 }
 
 type FileLogsReader struct {
@@ -48,6 +51,42 @@ func (l *FileLogsReader) Read() iter.Seq2[*Log, error] {
 				continue
 			}
 
+			if err := l.processData(data, yield); err != nil {
+				if !yield(nil, err) {
+					return
+				}
+			}
+		}
+	}
+}
+
+func (l *FileLogsReader) ReadFromLSN(ctx context.Context, lsn uint64) iter.Seq2[*Log, error] {
+	return func(yield func(*Log, error) bool) {
+		if ctx.Err() != nil {
+			if !yield(nil, ctx.Err()) {
+				return
+			}
+			return
+		}
+		segment, err := l.filesystem.GetSegmentForLSN(lsn)
+		if err != nil {
+			if !yield(nil, err) {
+				return
+			}
+			return
+		}
+		for data, err := range l.filesystem.ReadContinuouslyFromSegment(segment) {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			if err != nil {
+				if !yield(nil, err) {
+					return
+				}
+				continue
+			}
 			if err := l.processData(data, yield); err != nil {
 				if !yield(nil, err) {
 					return
