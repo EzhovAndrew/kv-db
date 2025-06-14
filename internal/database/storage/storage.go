@@ -36,6 +36,7 @@ type WAL interface {
 	// for replication purposes
 	GetLastLSN() uint64
 	WriteLogs(logs []*wal.Log) error
+	ReadLogsFromLSN(ctx context.Context, lsn uint64) iter.Seq2[*wal.Log, error]
 }
 
 type Storage struct {
@@ -145,8 +146,8 @@ func (s *Storage) recover() error {
 	return nil
 }
 
+// for REPLICATION purposes
 
-// for replication purposes
 func (s *Storage) ApplyLogs(logs []*wal.Log) error {
 	s.engine.DisableLSNOrdering()
 	if err := s.wal.WriteLogs(logs); err != nil {
@@ -163,4 +164,8 @@ func (s *Storage) ApplyLogs(logs []*wal.Log) error {
 
 func (s *Storage) GetLastLSN() uint64 {
 	return s.wal.GetLastLSN()
+}
+
+func (s *Storage) ReadLogsFromLSN(ctx context.Context, lsn uint64) iter.Seq2[*wal.Log, error] {
+	return s.wal.ReadLogsFromLSN(ctx, lsn)
 }

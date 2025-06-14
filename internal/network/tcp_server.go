@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"net"
 	"sync"
 	"time"
@@ -16,6 +17,8 @@ import (
 )
 
 type TCPHandler = func(ctx context.Context, data []byte) []byte
+
+type StreamHandler = func(ctx context.Context, initialData []byte) iter.Seq2[[]byte, error]
 
 type TCPServer struct {
 	listener      net.Listener
@@ -45,6 +48,18 @@ func NewTCPServer(cfg *configuration.NetworkConfig) (*TCPServer, error) {
 }
 
 func (s *TCPServer) HandleRequests(ctx context.Context, handler TCPHandler) {
+	s.handleConnections(ctx, func(ctx context.Context, conn net.Conn) {
+		s.handleConnection(ctx, conn, handler)
+	})
+}
+
+func (s *TCPServer) HandleStreamRequests(ctx context.Context, handler StreamHandler) {
+	s.handleConnections(ctx, func(ctx context.Context, conn net.Conn) {
+		s.handleStreamConnection(ctx, conn, handler)
+	})
+}
+
+func (s *TCPServer) handleConnections(ctx context.Context, connectionHandler func(context.Context, net.Conn)) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 
@@ -76,7 +91,7 @@ func (s *TCPServer) HandleRequests(ctx context.Context, handler TCPHandler) {
 			go func(conn net.Conn) {
 				defer s.semaphore.Release()
 				defer s.connectionsWg.Done()
-				s.handleConnection(ctx, conn, handler)
+				connectionHandler(ctx, conn)
 			}(conn)
 		}
 	}()
@@ -141,16 +156,106 @@ func (s *TCPServer) handleConnection(ctx context.Context, conn net.Conn, handler
 		}
 
 		response := handler(ctx, (*buffer)[:count])
-		if err = conn.SetWriteDeadline(time.Now().Add(time.Second * time.Duration(s.cfg.IdleTimeout))); err != nil {
-			logging.Warn("unable to set write deadline", zap.Error(err))
-			return
-		}
-		if _, err = conn.Write(response); err != nil {
-			logging.Warn(
-				"unable to write to connection",
-				zap.String("address", conn.RemoteAddr().String()), zap.Error(err),
-			)
+		if err := s.writeWithDeadline(conn, response); err != nil {
+			logging.Warn("unable to write response to connection",
+				zap.String("address", conn.RemoteAddr().String()),
+				zap.Error(err))
 			return
 		}
 	}
+}
+
+func (s *TCPServer) handleStreamConnection(ctx context.Context, conn net.Conn, handler StreamHandler) {
+	defer func() {
+		if v := recover(); v != nil {
+			logging.Error("captured panic in stream connection", zap.Any("panic", v))
+		}
+
+		if err := conn.Close(); err != nil {
+			logging.Error("failed to close stream connection", zap.Error(err))
+		}
+	}()
+
+	buffer := s.bufferPool.Get().(*[]byte)
+	defer s.bufferPool.Put(buffer)
+
+	err := conn.SetReadDeadline(time.Now().Add(time.Second * time.Duration(s.cfg.IdleTimeout)))
+	if err != nil {
+		logging.Warn("unable to set read deadline for initial data", zap.Error(err))
+		return
+	}
+
+	count, err := conn.Read(*buffer)
+	if err != nil {
+		if errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF) {
+			return
+		}
+		logging.Warn("unable to read initial data from stream connection", zap.Error(err))
+		return
+	}
+
+	if count == s.cfg.MaxMessageSize+1 {
+		logging.Warn("initial message size exceeds limit")
+		return
+	}
+
+	initialData := make([]byte, count)
+	copy(initialData, (*buffer)[:count])
+
+	dataIterator := handler(ctx, initialData)
+
+	// Send initial response (could be acknowledgment or initial data)
+	// and then stream data chunks using the iterator
+	for data, iterErr := range dataIterator {
+		select {
+		case <-ctx.Done():
+			logging.Info("stream connection context cancelled",
+				zap.String("address", conn.RemoteAddr().String()))
+			return
+		default:
+		}
+
+		if iterErr != nil {
+			logging.Error("error from stream iterator",
+				zap.Error(iterErr),
+				zap.String("address", conn.RemoteAddr().String()))
+
+			errorMsg := fmt.Sprintf("ERROR: %s", iterErr.Error())
+			if err := s.writeWithDeadline(conn, []byte(errorMsg)); err != nil {
+				logging.Warn("unable to send error message to client", zap.Error(err))
+			}
+			return
+		}
+
+		if len(data) == 0 {
+			continue // Skip empty data chunks
+		}
+
+		if err := s.writeWithDeadline(conn, data); err != nil {
+			logging.Warn("unable to write stream data to connection",
+				zap.String("address", conn.RemoteAddr().String()),
+				zap.Error(err))
+			return
+		}
+
+		logging.Info("sent stream data chunk",
+			zap.String("address", conn.RemoteAddr().String()),
+			zap.Int("bytes", len(data)))
+	}
+
+	logging.Info("stream connection completed",
+		zap.String("address", conn.RemoteAddr().String()))
+}
+
+func (s *TCPServer) writeWithDeadline(conn net.Conn, data []byte) error {
+	if err := conn.SetWriteDeadline(time.Now().Add(time.Second * time.Duration(s.cfg.IdleTimeout))); err != nil {
+		return fmt.Errorf("unable to set write deadline: %w", err)
+	}
+
+	_, err := conn.Write(data)
+	if err != nil {
+		return fmt.Errorf("unable to write data: %w", err)
+	}
+
+	return nil
 }

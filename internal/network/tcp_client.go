@@ -26,30 +26,30 @@ type TCPClient struct {
 	conn    net.Conn
 	cfg     *configuration.NetworkConfig
 	timeout time.Duration
-	
+
 	// Health monitoring
-	healthMutex     sync.RWMutex
-	healthCtx       context.Context
-	healthCancel    context.CancelFunc
-	healthWg        sync.WaitGroup
-	isHealthy       bool
-	lastPingTime    time.Time
+	healthMutex      sync.RWMutex
+	healthCtx        context.Context
+	healthCancel     context.CancelFunc
+	healthWg         sync.WaitGroup
+	isHealthy        bool
+	lastPingTime     time.Time
 	consecutiveFails int
-	
+
 	// Push model support
-	pushMutex       sync.RWMutex
-	pushCtx         context.Context
-	pushCancel      context.CancelFunc
-	pushWg          sync.WaitGroup
-	messageHandler  MessageHandler
-	isPushMode      bool
+	pushMutex      sync.RWMutex
+	pushCtx        context.Context
+	pushCancel     context.CancelFunc
+	pushWg         sync.WaitGroup
+	messageHandler MessageHandler
+	isPushMode     bool
 }
 
 func NewTCPClient(cfg *configuration.NetworkConfig) *TCPClient {
 	return &TCPClient{
-		cfg:     cfg,
-		timeout: time.Second * time.Duration(cfg.IdleTimeout),
-		isHealthy: false,
+		cfg:        cfg,
+		timeout:    time.Second * time.Duration(cfg.IdleTimeout),
+		isHealthy:  false,
 		isPushMode: false,
 	}
 }
@@ -60,16 +60,16 @@ func (c *TCPClient) Connect(ctx context.Context) error {
 	}
 
 	address := net.JoinHostPort(c.cfg.Ip, c.cfg.Port)
-	
+
 	dialer := &net.Dialer{
 		Timeout: c.timeout,
 	}
-	
+
 	conn, err := dialer.DialContext(ctx, "tcp", address)
 	if err != nil {
 		return fmt.Errorf("failed to connect to %s: %w", address, err)
 	}
-	
+
 	c.conn = conn
 	c.setHealthy(true)
 	logging.Info("Connected to server", zap.String("address", address))
@@ -180,10 +180,10 @@ func (c *TCPClient) IsPushMode() bool {
 func (c *TCPClient) Close() error {
 	// Stop push mode first
 	c.StopPushMode()
-	
+
 	// Stop health monitoring
 	c.StopHealthMonitoring()
-	
+
 	if c.conn == nil {
 		return nil
 	}
@@ -191,7 +191,7 @@ func (c *TCPClient) Close() error {
 	err := c.conn.Close()
 	c.conn = nil
 	c.setHealthy(false)
-	
+
 	if err != nil {
 		logging.Error("Failed to close connection", zap.Error(err))
 		return fmt.Errorf("failed to close connection: %w", err)
@@ -232,7 +232,7 @@ func (c *TCPClient) SendBatch(ctx context.Context, messages [][]byte) ([][]byte,
 	}
 
 	responses := make([][]byte, 0, len(messages))
-	
+
 	for i, message := range messages {
 		select {
 		case <-ctx.Done():
@@ -263,10 +263,10 @@ func (c *TCPClient) StartHealthMonitoring(ctx context.Context) {
 
 	// Create new context for health monitoring
 	c.healthCtx, c.healthCancel = context.WithCancel(ctx)
-	
+
 	c.healthWg.Add(1)
 	go c.healthMonitorLoop()
-	
+
 	logging.Info("Health monitoring started")
 }
 
@@ -315,19 +315,19 @@ func (c *TCPClient) performHealthCheck() {
 	defer cancel()
 
 	err := c.Ping(pingCtx)
-	
+
 	c.healthMutex.Lock()
 	defer c.healthMutex.Unlock()
 
 	if err != nil {
 		c.consecutiveFails++
 		c.isHealthy = false
-		
-		logging.Warn("Health check failed", 
+
+		logging.Warn("Health check failed",
 			zap.Error(err),
 			zap.Int("consecutive_failures", c.consecutiveFails),
 			zap.String("remote_addr", c.getRemoteAddrString()))
-		
+
 		// If we have too many consecutive failures, consider the connection dead
 		if c.consecutiveFails >= 3 {
 			logging.Error("Connection considered unhealthy after consecutive failures",
@@ -388,12 +388,11 @@ func (c *TCPClient) WaitForHealthy(ctx context.Context, timeout time.Duration) e
 	}
 }
 
-// Fixed pushModeLoop with better error handling and resource management
 func (c *TCPClient) pushModeLoop() {
 	defer c.pushWg.Done()
-	
+
 	buffer := make([]byte, c.cfg.MaxMessageSize+1)
-	
+
 	for {
 		select {
 		case <-c.pushCtx.Done():
@@ -415,14 +414,13 @@ func (c *TCPClient) pushModeLoop() {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				continue // Continue loop to check context
 			}
-			
-			// Check for connection closed errors
+
 			if errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF) {
 				logging.Info("Connection closed in push mode")
 				c.setHealthy(false)
 				return
 			}
-			
+
 			logging.Error("Failed to read in push mode", zap.Error(err))
 			c.setHealthy(false)
 			return
@@ -438,19 +436,18 @@ func (c *TCPClient) pushModeLoop() {
 			continue
 		}
 
-		// Process the message through handler
 		message := make([]byte, n)
 		copy(message, buffer[:n])
-		
+
 		response := c.messageHandler(c.pushCtx, message)
-		
+
 		// Send response back to master
 		if err := c.sendResponse(response); err != nil {
 			logging.Error("Failed to send response in push mode", zap.Error(err))
 			c.setHealthy(false)
 			return
 		}
-		
+
 		logging.Info("Processed push message and sent response",
 			zap.Int("message_size", n),
 			zap.Int("response_size", len(response)))
@@ -503,10 +500,10 @@ func (c *TCPClient) StartPushMode(ctx context.Context, handler MessageHandler) e
 	c.messageHandler = handler
 	c.isPushMode = true
 	c.pushCtx, c.pushCancel = context.WithCancel(ctx)
-	
+
 	c.pushWg.Add(1)
 	go c.pushModeLoop()
-	
+
 	logging.Info("Push mode started - listening for master messages",
 		zap.String("remote_addr", c.getRemoteAddrString()))
 	return nil
@@ -515,7 +512,7 @@ func (c *TCPClient) StartPushMode(ctx context.Context, handler MessageHandler) e
 // Fixed healthMonitorLoop to avoid interference with push mode
 func (c *TCPClient) healthMonitorLoop() {
 	defer c.healthWg.Done()
-	
+
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
@@ -534,7 +531,7 @@ func (c *TCPClient) healthMonitorLoop() {
 				c.healthMutex.RLock()
 				pushModeRunning := c.isPushMode
 				c.healthMutex.RUnlock()
-				
+
 				if pushModeRunning && c.conn != nil {
 					c.setHealthy(true)
 				}

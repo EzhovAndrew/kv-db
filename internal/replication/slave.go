@@ -15,7 +15,7 @@ import (
 )
 
 func (rm *ReplicationManager) startSlave(ctx context.Context) {
-	
+
 	// Create network configuration for master connection
 	masterCfg := &configuration.NetworkConfig{
 		Ip:                      rm.cfg.Replication.MasterAddress,
@@ -48,16 +48,15 @@ func (rm *ReplicationManager) startSlave(ctx context.Context) {
 	logging.Info("Slave replication started successfully",
 		zap.String("master_address", net.JoinHostPort(rm.cfg.Replication.MasterAddress, rm.cfg.Replication.MasterPort)))
 
-
 	<-ctx.Done()
-	
+
 	// Cleanup
 	client.StopPushMode()
 	client.StopHealthMonitoring()
 	if err := client.Close(); err != nil {
 		logging.Warn("Error closing master connection", zap.Error(err))
 	}
-	
+
 	logging.Info("Slave replication stopped")
 }
 
@@ -81,7 +80,7 @@ func (rm *ReplicationManager) connectToMaster(ctx context.Context, client *netwo
 
 			if err := rm.sendLastLSNToMaster(ctx, client); err != nil {
 				logging.Error("Failed to send last LSN to master", zap.Error(err))
-				client.Close() // Close connection on LSN sync failure
+				client.Close() // nolint: errcheck
 				return fmt.Errorf("failed to sync LSN with master: %w", err)
 			}
 			return nil
@@ -161,7 +160,7 @@ func (rm *ReplicationManager) validateLogBatch(batch *LogBatch) error {
 		if event.LSN == 0 {
 			return fmt.Errorf("invalid LSN in event %d: %d", i, event.LSN)
 		}
-		
+
 		if len(event.Args) == 0 {
 			return fmt.Errorf("empty args in event %d", i)
 		}
@@ -178,7 +177,7 @@ func (rm *ReplicationManager) validateLogBatch(batch *LogBatch) error {
 // convertToWALLogs converts LogEvents to WAL Log structures
 func (rm *ReplicationManager) convertToWALLogs(events []LogEvent) []*wal.Log {
 	logs := make([]*wal.Log, len(events))
-	
+
 	for i, event := range events {
 		logs[i] = &wal.Log{
 			LSN:       event.LSN,
@@ -186,7 +185,7 @@ func (rm *ReplicationManager) convertToWALLogs(events []LogEvent) []*wal.Log {
 			Arguments: event.Args,
 		}
 	}
-	
+
 	return logs
 }
 

@@ -2,6 +2,7 @@ package replication
 
 import (
 	"context"
+	"iter"
 
 	"github.com/EzhovAndrew/kv-db/internal/configuration"
 	"github.com/EzhovAndrew/kv-db/internal/database/storage/wal"
@@ -26,18 +27,23 @@ type StorageApplier interface {
 	GetLastLSN() uint64
 }
 
+type LogsReader interface {
+	ReadLogsFromLSN(ctx context.Context, lsn uint64) iter.Seq2[*wal.Log, error]
+}
+
 type ReplicationManager struct {
-	role       string
-	cfg        *configuration.Config
+	role string
+	cfg  *configuration.Config
 
 	client         *network.TCPClient
 	storageApplier StorageApplier
+	logsReader     LogsReader
 }
 
 func NewReplicationManager(cfg *configuration.Config) *ReplicationManager {
 	return &ReplicationManager{
-		role:       cfg.Replication.Role,
-		cfg: cfg,
+		role: cfg.Replication.Role,
+		cfg:  cfg,
 	}
 }
 
@@ -61,5 +67,6 @@ func (rm *ReplicationManager) SetStorageApplier(applier StorageApplier) {
 	rm.storageApplier = applier
 }
 
-func (rm *ReplicationManager) startMaster(ctx context.Context) {}
-
+func (rm *ReplicationManager) SetLogsReader(reader LogsReader) {
+	rm.logsReader = reader
+}

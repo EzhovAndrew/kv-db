@@ -27,6 +27,7 @@ type TCPServer interface {
 type ReplicationManager interface {
 	Start(ctx context.Context)
 	SetStorageApplier(replication.StorageApplier)
+	SetLogsReader(replication.LogsReader)
 	IsSlave() bool
 }
 
@@ -54,6 +55,7 @@ func NewInitializer(cfg *configuration.Config) (*Initializer, error) {
 	if cfg.Replication != nil {
 		rm = replication.NewReplicationManager(cfg)
 		rm.SetStorageApplier(db)
+		rm.SetLogsReader(db)
 		logging.Info("Replication configured")
 		if rm.IsSlave() {
 			db.SetReadOnly()

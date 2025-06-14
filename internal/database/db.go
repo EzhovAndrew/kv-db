@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"iter"
 
 	"github.com/EzhovAndrew/kv-db/internal/configuration"
 	"github.com/EzhovAndrew/kv-db/internal/database/compute"
@@ -19,6 +20,7 @@ type Storage interface {
 	// for replication purposes
 	ApplyLogs(logs []*wal.Log) error
 	GetLastLSN() uint64
+	ReadLogsFromLSN(ctx context.Context, lsn uint64) iter.Seq2[*wal.Log, error]
 }
 
 type Database struct {
@@ -103,4 +105,8 @@ func (db *Database) ApplyLogs(logs []*wal.Log) error {
 
 func (db *Database) GetLastLSN() uint64 {
 	return db.storage.GetLastLSN()
+}
+
+func (db *Database) ReadLogsFromLSN(ctx context.Context, lsn uint64) iter.Seq2[*wal.Log, error] {
+	return db.storage.ReadLogsFromLSN(ctx, lsn)
 }
