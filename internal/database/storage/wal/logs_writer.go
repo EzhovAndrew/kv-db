@@ -12,7 +12,7 @@ import (
 )
 
 type FileSystemWriteSyncer interface {
-	WriteSync(data []byte) error
+	WriteSync(data []byte, lsnStart uint64, lsnEnd uint64) error
 }
 
 type FileLogsWriter struct {
@@ -48,7 +48,7 @@ func (l *FileLogsWriter) Write(logs []*Log) (err error) {
 	for _, log := range logs {
 		l.encodeLog(log, l.buf)
 	}
-	return l.filesystem.WriteSync(l.buf.Bytes())
+	return l.filesystem.WriteSync(l.buf.Bytes(), logs[0].LSN, logs[len(logs)-1].LSN)
 }
 
 func (l *FileLogsWriter) encodeLog(log *Log, buf *bytes.Buffer) {

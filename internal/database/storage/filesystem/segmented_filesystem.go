@@ -12,6 +12,13 @@ import (
 	"go.uber.org/zap"
 )
 
+type MetadataManager interface {
+	AddNewSegmentOffset(segmentFilename string, lsnStart, lsnEnd uint64) error
+	GetSegmentNameForLSN(lsn uint64) (string, error)
+	GetLastWALFileName() (string, error)
+	GetWALFilenames() ([]string, error)
+}
+
 type SegmentedFileSystem struct {
 	dataDir        string
 	maxSegmentSize int
@@ -104,7 +111,7 @@ func (fs *SegmentedFileSystem) reuseLastSegment(walFilePath string) error {
 	return nil
 }
 
-func (fs *SegmentedFileSystem) WriteSync(data []byte) error {
+func (fs *SegmentedFileSystem) WriteSync(data []byte, lsnStart uint64, lsnEnd uint64) error {
 	if fs.currentSegment == nil || fs.currentSegment.checkOverflow(fs.maxSegmentSize, len(data)) {
 		err := fs.rotateSegment()
 		if err != nil {
