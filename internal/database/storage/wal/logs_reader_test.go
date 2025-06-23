@@ -10,6 +10,7 @@ import (
 
 	"github.com/EzhovAndrew/kv-db/internal/configuration"
 	"github.com/EzhovAndrew/kv-db/internal/database/compute"
+	"github.com/EzhovAndrew/kv-db/internal/database/storage/encoders"
 	"github.com/EzhovAndrew/kv-db/internal/logging"
 	"github.com/EzhovAndrew/kv-db/internal/utils"
 	"github.com/stretchr/testify/assert"
@@ -143,7 +144,7 @@ func TestFileLogsReader_Read_CorruptedLSN(t *testing.T) {
 	for _, err := range reader.Read() {
 		if err != nil {
 			errorCount++
-			assert.Equal(t, ErrDecodeLSN, err)
+			assert.Equal(t, encoders.ErrDecodeLSN, err)
 		}
 	}
 
@@ -168,7 +169,7 @@ func TestFileLogsReader_Read_CorruptedCommandID(t *testing.T) {
 	for _, err := range reader.Read() {
 		if err != nil {
 			errorCount++
-			assert.Equal(t, ErrDecodeCmdID, err)
+			assert.Equal(t, encoders.ErrDecodeCmdID, err)
 		}
 	}
 
@@ -194,7 +195,7 @@ func TestFileLogsReader_Read_CorruptedArgumentsNum(t *testing.T) {
 	for _, err := range reader.Read() {
 		if err != nil {
 			errorCount++
-			assert.Equal(t, ErrDecodeArgumentsNum, err)
+			assert.Equal(t, encoders.ErrDecodeArgumentsNum, err)
 		}
 	}
 
@@ -221,7 +222,7 @@ func TestFileLogsReader_Read_CorruptedArgumentLength(t *testing.T) {
 	for _, err := range reader.Read() {
 		if err != nil {
 			errorCount++
-			assert.Equal(t, ErrDecodeArgumentLen, err)
+			assert.Equal(t, encoders.ErrDecodeArgumentLen, err)
 		}
 	}
 
@@ -252,7 +253,7 @@ func TestFileLogsReader_Read_CorruptedArgumentData(t *testing.T) {
 	for _, err := range reader.Read() {
 		if err != nil {
 			errorCount++
-			assert.Equal(t, ErrDecodeArgument, err)
+			assert.Equal(t, encoders.ErrDecodeArgument, err)
 		}
 	}
 
@@ -275,7 +276,7 @@ func TestFileLogsReader_Read_EOFHandling(t *testing.T) {
 	var logs []*Log
 	for log, err := range reader.Read() {
 		if err != nil {
-			assert.Equal(t, ErrDecodeCmdID, err)
+			assert.Equal(t, encoders.ErrDecodeCmdID, err)
 		} else {
 			logs = append(logs, log)
 		}
@@ -410,7 +411,7 @@ func TestFileLogsReader_Read_PartialLogAtEndOfChunk(t *testing.T) {
 	for log, err := range reader.Read() {
 		if err != nil {
 			errorCount++
-			assert.Equal(t, ErrDecodeArgumentsNum, err)
+			assert.Equal(t, encoders.ErrDecodeArgumentsNum, err)
 		} else {
 			logs = append(logs, log)
 		}

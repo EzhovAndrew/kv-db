@@ -2,17 +2,16 @@ package wal
 
 import (
 	"bytes"
-	"encoding/binary"
 	"errors"
 
+	"github.com/EzhovAndrew/kv-db/internal/database/storage/encoders"
 	"github.com/EzhovAndrew/kv-db/internal/database/storage/filesystem"
 	"github.com/EzhovAndrew/kv-db/internal/logging"
-	"github.com/EzhovAndrew/kv-db/internal/utils"
 	"go.uber.org/zap"
 )
 
 type FileSystemWriteSyncer interface {
-	WriteSync(data []byte, lsnStart uint64, lsnEnd uint64) error
+	WriteSync(data []byte, lsnStart uint64) error
 }
 
 type FileLogsWriter struct {
@@ -46,26 +45,7 @@ func (l *FileLogsWriter) Write(logs []*Log) (err error) {
 
 	l.buf.Reset()
 	for _, log := range logs {
-		l.encodeLog(log, l.buf)
+		encoders.EncodeLog(log, l.buf)
 	}
-	return l.filesystem.WriteSync(l.buf.Bytes(), logs[0].LSN, logs[len(logs)-1].LSN)
-}
-
-func (l *FileLogsWriter) encodeLog(log *Log, buf *bytes.Buffer) {
-	var lsnBuf [10]byte
-	n := binary.PutUvarint(lsnBuf[:], log.LSN)
-	buf.Write(lsnBuf[:n])
-
-	var cmdBuf [5]byte
-	n = binary.PutUvarint(cmdBuf[:], uint64(log.Command))
-	buf.Write(cmdBuf[:n])
-
-	n = binary.PutUvarint(lsnBuf[:], uint64(len(log.Arguments)))
-	buf.Write(lsnBuf[:n])
-
-	for _, arg := range log.Arguments {
-		n = binary.PutUvarint(lsnBuf[:], uint64(len(arg)))
-		buf.Write(lsnBuf[:n])
-		buf.Write(utils.StringToBytes(arg))
-	}
+	return l.filesystem.WriteSync(l.buf.Bytes(), logs[0].LSN)
 }

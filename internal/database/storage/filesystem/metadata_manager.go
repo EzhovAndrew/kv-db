@@ -19,7 +19,21 @@ type FileMetadataManager struct {
 	fd               *os.File
 }
 
+type WALMetadata struct {
+	segmentFilename string
+	lsnStart        uint64
+}
+
+func (w *WALMetadata) GetSegmentFilename() string {
+	return w.segmentFilename
+}
+
+func (w *WALMetadata) GetLSNStart() uint64 {
+	return w.lsnStart
+}
+
 var globalManager *FileMetadataManager
+var ErrNoWALFilesFound = fmt.Errorf("no WAL files found")
 
 func NewFileMetadataManager(metadataFilePath string) (*FileMetadataManager, error) {
 	if globalManager != nil {
@@ -33,7 +47,7 @@ func NewFileMetadataManager(metadataFilePath string) (*FileMetadataManager, erro
 	return globalManager, nil
 }
 
-func (m *FileMetadataManager) AddNewSegmentOffset(segmentFilename string, lsnStart, lsnEnd uint64) error {
+func (m *FileMetadataManager) AddNewSegmentOffset(segmentFilename string, lsnStart uint64) error {
 	return concurrency.WithLock(
 		&m.mu,
 		func() error {
@@ -46,13 +60,18 @@ func (m *FileMetadataManager) AddNewSegmentOffset(segmentFilename string, lsnSta
 	)
 }
 
-func (m *FileMetadataManager) GetSegmentNameForLSN(lsn uint64) (filename string, err error) {
+func (m *FileMetadataManager) GetSegmentMetadataForLSN(lsn uint64) (*WALMetadata, error) {
+	var metadata *WALMetadata
+	var err error
+
 	defer func() {
 		if v := recover(); v != nil {
 			logging.Error("Recovered from panic", zap.Any("panic", v))
 			err = fmt.Errorf("failed to get segment name for LSN: %v", v)
+			metadata = nil
 		}
 	}()
+
 	err = concurrency.WithLock(
 		&m.mu,
 		func() error {
@@ -60,52 +79,30 @@ func (m *FileMetadataManager) GetSegmentNameForLSN(lsn uint64) (filename string,
 			if err != nil {
 				return err
 			}
+
 			scanner := bufio.NewScanner(m.fd)
 			for scanner.Scan() {
 				line := scanner.Text()
 				parts := strings.Split(line, ",")
-				if len(parts) < 2 {
+				if len(parts) != 2 {
 					continue
 				}
+
 				startLSN, err := strconv.ParseUint(parts[1], 10, 64)
 				if err != nil {
 					continue
 				}
+
+				// If this segment's start LSN is greater than our target LSN,
+				// we've gone too far - the previous segment is the right one
 				if startLSN > lsn {
 					break
 				}
-				filename = parts[0]
-			}
-			// Reset the file pointer to the end of the file
-			_, err = m.fd.Seek(0, 2)
-			return err
-		},
-	)
-	return filename, err
-}
 
-func (m *FileMetadataManager) GetLastWALFileName() (string, error) {
-	defer func() {
-		if v := recover(); v != nil {
-			logging.Error("Recovered from panic", zap.Any("panic", v))
-		}
-	}()
-	
-	var lastFilename string
-	err := concurrency.WithLock(
-		&m.mu,
-		func() error {
-			_, err := m.fd.Seek(0, 0)
-			if err != nil {
-				return err
-			}
-			
-			scanner := bufio.NewScanner(m.fd)
-			for scanner.Scan() {
-				line := scanner.Text()
-				parts := strings.Split(line, ",")
-				if len(parts) >= 1 && parts[0] != "" {
-					lastFilename = parts[0]
+				// This segment could contain our LSN
+				metadata = &WALMetadata{
+					segmentFilename: parts[0],
+					lsnStart:        startLSN,
 				}
 			}
 
@@ -113,31 +110,43 @@ func (m *FileMetadataManager) GetLastWALFileName() (string, error) {
 			return err
 		},
 	)
-	return lastFilename, err
+	return metadata, err
 }
 
-func (m *FileMetadataManager) GetWALFilenames() ([]string, error) {
+func (m *FileMetadataManager) GetLastWALFileMetadata() (*WALMetadata, error) {
+	var lastMetadata *WALMetadata
+	var err error
+
 	defer func() {
 		if v := recover(); v != nil {
 			logging.Error("Recovered from panic", zap.Any("panic", v))
+			err = fmt.Errorf("failed to get last WAL filename: %v", v)
+			lastMetadata = nil
 		}
 	}()
-	
-	var filenames []string
-	err := concurrency.WithLock(
+
+	err = concurrency.WithLock(
 		&m.mu,
 		func() error {
 			_, err := m.fd.Seek(0, 0)
 			if err != nil {
 				return err
 			}
-			
+
 			scanner := bufio.NewScanner(m.fd)
 			for scanner.Scan() {
 				line := scanner.Text()
 				parts := strings.Split(line, ",")
-				if len(parts) >= 1 && parts[0] != "" {
-					filenames = append(filenames, parts[0])
+				if len(parts) >= 2 && parts[0] != "" {
+					startLSN, err := strconv.ParseUint(parts[1], 10, 64)
+					if err != nil {
+						continue
+					}
+
+					lastMetadata = &WALMetadata{
+						segmentFilename: parts[0],
+						lsnStart:        startLSN,
+					}
 				}
 			}
 
@@ -145,7 +154,55 @@ func (m *FileMetadataManager) GetWALFilenames() ([]string, error) {
 			return err
 		},
 	)
-	return filenames, err
+	if lastMetadata == nil {
+		return nil, ErrNoWALFilesFound
+	}
+	return lastMetadata, err
+}
+
+func (m *FileMetadataManager) GetWALFilesMetadata() ([]*WALMetadata, error) {
+	var metadataList []*WALMetadata
+	var err error
+
+	defer func() {
+		if v := recover(); v != nil {
+			logging.Error("Recovered from panic", zap.Any("panic", v))
+			err = fmt.Errorf("failed to get WAL filenames: %v", v)
+			metadataList = nil
+		}
+	}()
+
+	err = concurrency.WithLock(
+		&m.mu,
+		func() error {
+			_, err := m.fd.Seek(0, 0)
+			if err != nil {
+				return err
+			}
+
+			scanner := bufio.NewScanner(m.fd)
+			for scanner.Scan() {
+				line := scanner.Text()
+				parts := strings.Split(line, ",")
+				if len(parts) >= 2 && parts[0] != "" {
+					startLSN, err := strconv.ParseUint(parts[1], 10, 64)
+					if err != nil {
+						continue
+					}
+
+					metadata := &WALMetadata{
+						segmentFilename: parts[0],
+						lsnStart:        startLSN,
+					}
+					metadataList = append(metadataList, metadata)
+				}
+			}
+
+			_, err = m.fd.Seek(0, 2)
+			return err
+		},
+	)
+	return metadataList, err
 }
 
 func (m *FileMetadataManager) Close() error {

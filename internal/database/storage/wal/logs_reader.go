@@ -3,30 +3,18 @@ package wal
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
-	"errors"
 	"io"
 	"iter"
 
+	"github.com/EzhovAndrew/kv-db/internal/database/storage/encoders"
 	"github.com/EzhovAndrew/kv-db/internal/database/storage/filesystem"
 	"github.com/EzhovAndrew/kv-db/internal/logging"
-	"github.com/EzhovAndrew/kv-db/internal/utils"
-	"go.uber.org/zap"
-)
-
-var (
-	ErrDecodeLSN          = errors.New("failed to decode LSN")
-	ErrDecodeCmdID        = errors.New("failed to decode command ID")
-	ErrDecodeArguments    = errors.New("failed to decode arguments")
-	ErrDecodeArgumentsNum = errors.New("failed to decode arguments number")
-	ErrDecodeArgumentLen  = errors.New("failed to decode argument length")
-	ErrDecodeArgument     = errors.New("failed to decode argument")
 )
 
 type FileSystemReader interface {
 	ReadAll() iter.Seq2[[]byte, error]
-	GetSegmentForLSN(lsn uint64) (int, error)
-	ReadContinuouslyFromSegment(segment int) iter.Seq2[[]byte, error]
+	GetSegmentForLSN(lsn uint64) (string, error)
+	ReadContinuouslyFromSegment(segment string) iter.Seq2[[]byte, error]
 }
 
 type FileLogsReader struct {
@@ -100,7 +88,7 @@ func (l *FileLogsReader) processData(data []byte, yield func(*Log, error) bool) 
 	buf := bytes.NewReader(data)
 
 	for buf.Len() > 0 {
-		log, bytesRead, err := l.decodeLog(buf)
+		log, bytesRead, err := encoders.DecodeLog(buf)
 		if err == io.EOF {
 			break
 		}
@@ -119,57 +107,4 @@ func (l *FileLogsReader) processData(data []byte, yield func(*Log, error) bool) 
 	}
 
 	return nil
-}
-
-// decodeLog decodes a single log entry from the reader and returns the log, bytes read, and any error
-func (l *FileLogsReader) decodeLog(buf *bytes.Reader) (*Log, int, error) {
-	initialPos := buf.Len()
-	entry := &Log{}
-
-	lsn, err := binary.ReadUvarint(buf)
-	if err != nil {
-		if err == io.EOF {
-			return nil, 0, err
-		}
-		logging.Error("Failed to decode LSN", zap.Error(err))
-		return nil, 0, ErrDecodeLSN
-	}
-	entry.LSN = lsn
-
-	cmdID, err := binary.ReadUvarint(buf)
-	if err != nil {
-		logging.Error("Failed to decode CmdID", zap.Error(err))
-		return nil, 0, ErrDecodeCmdID
-	}
-	entry.Command = int(cmdID)
-
-	numArgs, err := binary.ReadUvarint(buf)
-	if err != nil {
-		logging.Error("Failed to decode number of arguments", zap.Error(err))
-		return nil, 0, ErrDecodeArgumentsNum
-	}
-
-	entry.Arguments = make([]string, numArgs)
-	for i := uint64(0); i < numArgs; i++ {
-		argLen, err := binary.ReadUvarint(buf)
-		if err != nil {
-			logging.Error("Failed to decode argument length", zap.Error(err))
-			return nil, 0, ErrDecodeArgumentLen
-		}
-
-		arg := make([]byte, argLen)
-		n, err := io.ReadFull(buf, arg)
-		if err != nil {
-			logging.Error("Failed to read argument data", zap.Error(err))
-			return nil, 0, ErrDecodeArgument
-		}
-		if uint64(n) != argLen {
-			logging.Error("Unexpected EOF reading argument data")
-			return nil, 0, ErrDecodeArgument
-		}
-		entry.Arguments[i] = utils.BytesToString(arg)
-	}
-
-	bytesRead := initialPos - buf.Len()
-	return entry, bytesRead, nil
 }
