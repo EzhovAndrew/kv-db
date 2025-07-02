@@ -3,9 +3,12 @@ package filesystem
 import (
 	"errors"
 	"fmt"
+	"io"
 	"iter"
 	"os"
 	"path/filepath"
+	"sync/atomic"
+	"time"
 
 	"github.com/EzhovAndrew/kv-db/internal/database/storage/encoders"
 	"github.com/EzhovAndrew/kv-db/internal/logging"
@@ -22,7 +25,7 @@ type MetadataManager interface {
 type SegmentedFileSystem struct {
 	dataDir        string
 	maxSegmentSize int
-	currentSegment *Segment
+	currentSegment atomic.Pointer[Segment]
 	mm             MetadataManager
 }
 
@@ -103,21 +106,22 @@ func (fs *SegmentedFileSystem) reuseLastSegment(walFilePath string) error {
 		return fmt.Errorf("failed to open segment for append: %w", err)
 	}
 
-	// Set the current size based on existing file size
-	segment.setCurrentSize(int(fileInfo.Size()))
-	fs.currentSegment = segment
+	segment.setCurrentSize(fileInfo.Size())
+	fs.currentSegment.Store(segment)
 
 	return nil
 }
 
 func (fs *SegmentedFileSystem) WriteSync(data []byte, lsnStart uint64) error {
-	if fs.currentSegment == nil || fs.currentSegment.checkOverflow(fs.maxSegmentSize, len(data)) {
+	currentSegment := fs.currentSegment.Load()
+	if currentSegment == nil || currentSegment.checkOverflow(fs.maxSegmentSize, len(data)) {
 		err := fs.rotateSegment(lsnStart)
 		if err != nil {
 			return err
 		}
+		currentSegment = fs.currentSegment.Load()
 	}
-	return fs.currentSegment.writeSync(data)
+	return currentSegment.writeSync(data)
 }
 
 func (fs *SegmentedFileSystem) ReadAll() iter.Seq2[[]byte, error] {
@@ -144,8 +148,9 @@ func (fs *SegmentedFileSystem) ReadAll() iter.Seq2[[]byte, error] {
 }
 
 func (fs *SegmentedFileSystem) rotateSegment(startLsn uint64) error {
-	if fs.currentSegment != nil {
-		err := fs.currentSegment.close()
+	currentSegment := fs.currentSegment.Load()
+	if currentSegment != nil {
+		err := currentSegment.close()
 		if err != nil {
 			return err
 		}
@@ -156,10 +161,10 @@ func (fs *SegmentedFileSystem) rotateSegment(startLsn uint64) error {
 	if err != nil {
 		return err
 	}
-	fs.currentSegment = newSegment
+	fs.currentSegment.Store(newSegment)
 	err = fs.mm.AddNewSegmentOffset(newFileName, startLsn)
 	if err != nil {
-		errC := fs.currentSegment.close()
+		errC := newSegment.close()
 		if errC != nil {
 			logging.Error("Failed to close segment after not success metadata appending", zap.Error(errC))
 		}
@@ -188,38 +193,8 @@ func (fs *SegmentedFileSystem) ReadContinuouslyFromSegment(segment string) iter.
 		for {
 			isCurrentSegment := fs.isCurrentSegment(currentSegment)
 
-			if isCurrentSegment {
-				// For current segment, read incrementally with size checking
-				data, newOffset, err := fs.readCurrentSegmentIncremental(currentSegment, offset)
-				if err != nil {
-					if !yield(nil, err) {
-						return
-					}
-					return
-				}
-
-				if len(data) > 0 {
-					if !yield(data, nil) {
-						return
-					}
-					offset = newOffset
-					continue // Continue reading immediately when we have data
-				}
-
-				// No new data in current segment, check for next segment
-				nextSegment, switchErr := fs.getNextSegment(currentSegment)
-				if switchErr == nil && nextSegment != "" {
-					// Switch to next segment
-					currentSegment = nextSegment
-					offset = 0
-					continue
-				}
-
-				// No next segment, wait for more data
-				time.Sleep(1 * time.Millisecond)
-
-			} else {
-				// For non-current segments, read the entire remaining part at once
+			if !isCurrentSegment {
+				// For non-current segments, read the entire segment
 				data, err := fs.readCompleteSegmentFromOffset(currentSegment, offset)
 				if err != nil {
 					if !yield(nil, err) {
@@ -234,7 +209,6 @@ func (fs *SegmentedFileSystem) ReadContinuouslyFromSegment(segment string) iter.
 					}
 				}
 
-				// Move to next segment
 				nextSegment, switchErr := fs.getNextSegment(currentSegment)
 				if switchErr == nil && nextSegment != "" {
 					currentSegment = nextSegment
@@ -248,20 +222,47 @@ func (fs *SegmentedFileSystem) ReadContinuouslyFromSegment(segment string) iter.
 				}
 				return
 			}
+
+			// For current segment, read incrementally with size checking
+			data, newOffset, err := fs.readCurrentSegmentIncremental(currentSegment, offset)
+			if err != nil {
+				if !yield(nil, err) {
+					return
+				}
+				return
+			}
+
+			if len(data) > 0 {
+				if !yield(data, nil) {
+					return
+				}
+				offset = newOffset
+				continue // Continue reading immediately when we have data
+			}
+
+			// No new data in current segment, check for next segment
+			nextSegment, switchErr := fs.getNextSegment(currentSegment)
+			if switchErr == nil && nextSegment != "" {
+				currentSegment = nextSegment
+				offset = 0
+				continue
+			}
+
+			// No next segment, wait for more data
+			time.Sleep(1 * time.Millisecond)
 		}
 	}
 }
 
 // Check if the given segment is the current active segment
 func (fs *SegmentedFileSystem) isCurrentSegment(segmentName string) bool {
-	// We need to protect access to currentSegment, but we want to minimize lock time
-	// Since we only read a pointer/string, we can use a quick check
-	if fs.currentSegment == nil {
+	currentSegment := fs.currentSegment.Load()
+	if currentSegment == nil {
 		return false
 	}
 
 	// Extract just the filename from the full path for comparison
-	currentFileName := filepath.Base(fs.currentSegment.FileName)
+	currentFileName := filepath.Base(currentSegment.FileName)
 	return currentFileName == segmentName
 }
 
@@ -271,9 +272,10 @@ func (fs *SegmentedFileSystem) readCurrentSegmentIncremental(segmentName string,
 
 	// Get current size of the segment to avoid partial reads
 	var currentSize int64
-	if fs.currentSegment != nil && filepath.Base(fs.currentSegment.FileName) == segmentName {
+	currentSegment := fs.currentSegment.Load()
+	if currentSegment != nil && filepath.Base(currentSegment.FileName) == segmentName {
 		// For current segment, use the tracked size to avoid reading partial writes
-		currentSize = int64(fs.currentSegment.currentSize)
+		currentSize = currentSegment.getCurrentSize()
 	} else {
 		// Fallback to file stat if we can't get tracked size
 		fileInfo, err := os.Stat(segmentPath)
@@ -290,10 +292,6 @@ func (fs *SegmentedFileSystem) readCurrentSegmentIncremental(segmentName string,
 
 	// Read only up to the current size to avoid partial reads
 	readSize := currentSize - offset
-	if readSize <= 0 {
-		return nil, offset, nil
-	}
-
 	file, err := os.Open(segmentPath)
 	if err != nil {
 		return nil, offset, fmt.Errorf("failed to open current segment %s: %w", segmentPath, err)
@@ -350,6 +348,7 @@ func (fs *SegmentedFileSystem) getNextSegment(currentSegment string) (string, er
 		return "", err
 	}
 
+	// TODO: This is a naive implementation, refactor to use a more efficient data structure
 	// Find current segment index
 	currentIndex := -1
 	for i, metadata := range walFiles {

@@ -8,6 +8,7 @@ import (
 	"github.com/EzhovAndrew/kv-db/internal/configuration"
 	"github.com/EzhovAndrew/kv-db/internal/database/compute"
 	"github.com/EzhovAndrew/kv-db/internal/database/storage/encoders"
+	"github.com/EzhovAndrew/kv-db/internal/database/storage/filesystem"
 	"github.com/EzhovAndrew/kv-db/internal/logging"
 	"go.uber.org/zap"
 )
@@ -43,14 +44,15 @@ type WAL struct {
 }
 
 func NewWAL(cfg *configuration.WALConfig) *WAL {
+	fileSystem := filesystem.NewSegmentedFileSystem(cfg.DataDirectory, cfg.MaxSegmentSize)
 	wal := &WAL{
 		batch:         make([]*Log, 0, cfg.FlushBatchSize),
 		responseChans: make([]chan struct{}, 0, cfg.FlushBatchSize),
 		lsnGenerator:  NewLSNGenerator(0),
 		newLogsChan:   make(chan NewLog),
 		shutdownChan:  make(chan struct{}),
-		logsWriter:    NewFileLogsWriter(cfg.DataDirectory, cfg.MaxSegmentSize),
-		logsReader:    NewFileLogsReader(cfg.DataDirectory, cfg.MaxSegmentSize),
+		logsWriter:    NewFileLogsWriter(fileSystem),
+		logsReader:    NewFileLogsReader(fileSystem),
 	}
 	go wal.handleNewLogs(cfg)
 	return wal

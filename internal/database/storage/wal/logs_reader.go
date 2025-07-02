@@ -21,8 +21,7 @@ type FileLogsReader struct {
 	filesystem FileSystemReader
 }
 
-func NewFileLogsReader(dataDir string, maxSegmentSize int) *FileLogsReader {
-	fileSystem := filesystem.NewSegmentedFileSystem(dataDir, maxSegmentSize)
+func NewFileLogsReader(fileSystem FileSystemReader) *FileLogsReader {
 	return &FileLogsReader{filesystem: fileSystem}
 }
 
