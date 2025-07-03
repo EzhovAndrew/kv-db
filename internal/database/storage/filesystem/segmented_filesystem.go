@@ -20,6 +20,7 @@ type MetadataManager interface {
 	GetSegmentMetadataForLSN(lsn uint64) (*WALMetadata, error)
 	GetLastWALFileMetadata() (*WALMetadata, error)
 	GetWALFilesMetadata() ([]*WALMetadata, error)
+	Close() error
 }
 
 type SegmentedFileSystem struct {
@@ -27,6 +28,7 @@ type SegmentedFileSystem struct {
 	maxSegmentSize int
 	currentSegment atomic.Pointer[Segment]
 	mm             MetadataManager
+	readBufferSize int // Buffer size for streaming reads
 }
 
 func NewSegmentedFileSystem(dataDir string, maxSegmentSize int) *SegmentedFileSystem {
@@ -39,6 +41,7 @@ func NewSegmentedFileSystem(dataDir string, maxSegmentSize int) *SegmentedFileSy
 		dataDir:        dataDir,
 		maxSegmentSize: maxSegmentSize,
 		mm:             mm,
+		readBufferSize: 64 * 1024, // 64KB default buffer for streaming reads
 	}
 	if err := s.createDir(); err != nil {
 		logging.Fatal("Failed to create directory for WAL logs", zap.Error(err))
@@ -69,37 +72,83 @@ func (fs *SegmentedFileSystem) initializeSegments() error {
 			return fmt.Errorf("failed to reuse last segment: %w", err)
 		}
 	} else {
-		// Last WAL file is too big, create a new segment, but at first get last LSN in existing wal file
-		filePath := filepath.Join(fs.dataDir, lastWALFileMetadata.GetSegmentFilename())
-		data, err := os.ReadFile(filePath)
+		// Last WAL file is too big, create a new segment
+		// Get the last valid LSN from the segment
+		nextLSN, err := fs.getNextValidLSN(lastWALFileMetadata.GetSegmentFilename())
 		if err != nil {
-			return fmt.Errorf("failed to read file to get last LSN %s: %w", filePath, err)
+			return fmt.Errorf("failed to determine next LSN: %w", err)
 		}
-		lastLSN, err := encoders.GetLastLSNInData(data)
-		if err != nil {
-			return fmt.Errorf("failed to get last LSN while decoding in file %s: %w", filePath, err)
-		}
-		return fs.rotateSegment(lastLSN + 1)
+		return fs.rotateSegment(nextLSN)
 	}
 
 	return nil
 }
 
-func (fs *SegmentedFileSystem) canReuseSegment(walFilePath string) (bool, error) {
-	fileInfo, err := os.Stat(walFilePath)
+// getNextValidLSN safely determines the next LSN to use, handling potential gaps
+func (fs *SegmentedFileSystem) getNextValidLSN(segmentFilename string) (uint64, error) {
+	filePath := filepath.Join(fs.dataDir, segmentFilename)
+	data, err := os.ReadFile(filePath)
 	if err != nil {
-		return false, fmt.Errorf("failed to stat file %s: %w", walFilePath, err)
+		return 0, fmt.Errorf("failed to read file to get last LSN %s: %w", filePath, err)
+	}
+
+	if len(data) == 0 {
+		// Empty file, return 0 which will be handled appropriately
+		return 0, nil
+	}
+
+	lastLSN, err := encoders.GetLastLSNInData(data)
+	if err != nil {
+		// If we can't decode the data, it might be corrupted
+		// Log warning and use a safe fallback
+		logging.Warn("Failed to decode LSN from segment data, using metadata LSN as fallback",
+			zap.String("segment", segmentFilename),
+			zap.Error(err))
+
+		// Fallback to using a high LSN to avoid conflicts
+		// This is safer than potentially reusing LSNs
+		return fs.getHighestKnownLSN() + 10000, nil
+	}
+
+	return lastLSN + 1, nil
+}
+
+// getHighestKnownLSN scans all metadata to find the highest known LSN
+func (fs *SegmentedFileSystem) getHighestKnownLSN() uint64 {
+	// This is a safety fallback - in practice, you might want to implement
+	// a more sophisticated recovery mechanism
+	walFiles, err := fs.mm.GetWALFilesMetadata()
+	if err != nil {
+		return 1000000 // Very conservative fallback
+	}
+
+	var maxLSN uint64
+	for _, metadata := range walFiles {
+		if metadata.GetLSNStart() > maxLSN {
+			maxLSN = metadata.GetLSNStart()
+		}
+	}
+
+	return maxLSN
+}
+
+func (fs *SegmentedFileSystem) canReuseSegment(segmentFilename string) (bool, error) {
+	segmentPath := filepath.Join(fs.dataDir, segmentFilename)
+	fileInfo, err := os.Stat(segmentPath)
+	if err != nil {
+		return false, fmt.Errorf("failed to stat file %s: %w", segmentPath, err)
 	}
 
 	return fileInfo.Size() < int64(fs.maxSegmentSize), nil
 }
 
-func (fs *SegmentedFileSystem) reuseLastSegment(walFilePath string) error {
-	segment := NewSegment(walFilePath)
+func (fs *SegmentedFileSystem) reuseLastSegment(segmentFilename string) error {
+	segmentPath := filepath.Join(fs.dataDir, segmentFilename)
+	segment := NewSegment(segmentPath)
 
-	fileInfo, err := os.Stat(walFilePath)
+	fileInfo, err := os.Stat(segmentPath)
 	if err != nil {
-		return fmt.Errorf("failed to stat file %s: %w", walFilePath, err)
+		return fmt.Errorf("failed to stat file %s: %w", segmentPath, err)
 	}
 
 	if err := segment.openForAppend(); err != nil {
@@ -132,10 +181,10 @@ func (fs *SegmentedFileSystem) ReadAll() iter.Seq2[[]byte, error] {
 			return
 		}
 		for _, fileMetadata := range walFiles {
-			filePath := filepath.Join(fs.dataDir, fileMetadata.GetSegmentFilename())
-			data, err := os.ReadFile(filePath)
+			segmentPath := filepath.Join(fs.dataDir, fileMetadata.GetSegmentFilename())
+			data, err := os.ReadFile(segmentPath)
 			if err != nil {
-				if !yield(nil, fmt.Errorf("failed to read file %s: %w", filePath, err)) {
+				if !yield(nil, fmt.Errorf("failed to read file %s: %w", segmentPath, err)) {
 					return
 				}
 				continue
@@ -155,26 +204,53 @@ func (fs *SegmentedFileSystem) rotateSegment(startLsn uint64) error {
 			return err
 		}
 	}
-	newFileName := generateFileName(fs.dataDir)
-	newSegment := NewSegment(newFileName)
+	fileName := generateFileName()
+	newFilePath := filepath.Join(fs.dataDir, fileName)
+	newSegment := NewSegment(newFilePath)
 	err := newSegment.open()
 	if err != nil {
 		return err
 	}
-	fs.currentSegment.Store(newSegment)
-	err = fs.mm.AddNewSegmentOffset(newFileName, startLsn)
+
+	// Write metadata BEFORE atomically storing the segment to ensure crash consistency
+	err = fs.mm.AddNewSegmentOffset(fileName, startLsn)
 	if err != nil {
 		errC := newSegment.close()
 		if errC != nil {
-			logging.Error("Failed to close segment after not success metadata appending", zap.Error(errC))
+			logging.Error("Failed to close segment after metadata write failure", zap.Error(errC))
+		}
+		// Clean up the orphaned file
+		if removeErr := os.Remove(newFilePath); removeErr != nil {
+			logging.Error("Failed to remove orphaned segment file",
+				zap.String("filePath", newFilePath),
+				zap.Error(removeErr))
 		}
 		return err
 	}
+	// Only store atomically after metadata is successfully written
+	fs.currentSegment.Store(newSegment)
 	return nil
 }
 
 func (fs *SegmentedFileSystem) createDir() error {
 	return os.MkdirAll(fs.dataDir, 0755)
+}
+
+// Close properly shuts down the segmented filesystem
+func (fs *SegmentedFileSystem) Close() error {
+	currentSegment := fs.currentSegment.Load()
+	if currentSegment != nil {
+		if err := currentSegment.close(); err != nil {
+			logging.Error("Failed to close current segment during shutdown", zap.Error(err))
+		}
+	}
+
+	if err := fs.mm.Close(); err != nil {
+		logging.Error("Failed to close metadata manager", zap.Error(err))
+		return err
+	}
+
+	return nil
 }
 
 func (fs *SegmentedFileSystem) GetSegmentForLSN(lsn uint64) (string, error) {
@@ -307,11 +383,10 @@ func (fs *SegmentedFileSystem) readCurrentSegmentIncremental(segmentName string,
 	return data[:n], offset + int64(n), nil
 }
 
-// Read complete segment from offset (for non-current segments)
+// Read complete segment from offset using streaming approach for large files
 func (fs *SegmentedFileSystem) readCompleteSegmentFromOffset(segmentName string, offset int64) ([]byte, error) {
 	segmentPath := filepath.Join(fs.dataDir, segmentName)
 
-	// For non-current segments, we can read the entire remaining file
 	file, err := os.Open(segmentPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open segment %s: %w", segmentPath, err)
@@ -329,13 +404,13 @@ func (fs *SegmentedFileSystem) readCompleteSegmentFromOffset(segmentName string,
 		return nil, nil // No data to read
 	}
 
-	// Read all remaining data from offset
+	// For small remaining data, read all at once
 	remainingSize := fileSize - offset
-	data := make([]byte, remainingSize)
-
+	chunkSize := min(int64(fs.readBufferSize), remainingSize)
+	data := make([]byte, chunkSize)
 	n, err := file.ReadAt(data, offset)
 	if err != nil && err != io.EOF {
-		return nil, fmt.Errorf("failed to read complete segment %s: %w", segmentPath, err)
+		return nil, fmt.Errorf("failed to read chunk from %s: %w", segmentPath, err)
 	}
 
 	return data[:n], nil
@@ -348,7 +423,6 @@ func (fs *SegmentedFileSystem) getNextSegment(currentSegment string) (string, er
 		return "", err
 	}
 
-	// TODO: This is a naive implementation, refactor to use a more efficient data structure
 	// Find current segment index
 	currentIndex := -1
 	for i, metadata := range walFiles {

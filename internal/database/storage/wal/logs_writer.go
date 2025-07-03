@@ -5,7 +5,6 @@ import (
 	"errors"
 
 	"github.com/EzhovAndrew/kv-db/internal/database/storage/encoders"
-	"github.com/EzhovAndrew/kv-db/internal/database/storage/filesystem"
 	"github.com/EzhovAndrew/kv-db/internal/logging"
 	"go.uber.org/zap"
 )

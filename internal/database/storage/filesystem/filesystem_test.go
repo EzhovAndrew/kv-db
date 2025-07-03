@@ -1,187 +1,129 @@
 package filesystem
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/EzhovAndrew/kv-db/internal/configuration"
+	"github.com/EzhovAndrew/kv-db/internal/logging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestMain(m *testing.M) {
+	// Initialize logging once before all tests
+	logging.Init(&configuration.LoggingConfig{})
+
+	// Run all tests
+	code := m.Run()
+
+	// Exit with the test result code
+	os.Exit(code)
+}
 
 func TestNewSegmentedFileSystem_EmptyDirectory(t *testing.T) {
 	tempDir := createTempDir(t)
 	defer os.RemoveAll(tempDir)
 
 	fs := NewSegmentedFileSystem(tempDir, 1024)
+	defer fs.Close()
 
 	assert.NotNil(t, fs)
 	assert.Equal(t, tempDir, fs.dataDir)
 	assert.Equal(t, 1024, fs.maxSegmentSize)
-	assert.NotNil(t, fs.currentSegment)
-	assert.NotEmpty(t, fs.walFiles)
-	assert.Equal(t, 0, fs.currentSegment.currentSize)
+
+	// Should have a current segment
+	currentSegment := fs.currentSegment.Load()
+	assert.NotNil(t, currentSegment)
+	assert.Equal(t, int64(0), currentSegment.getCurrentSize())
+
+	// Should have metadata file
+	metadataPath := filepath.Join(tempDir, "metadata.txt")
+	assert.FileExists(t, metadataPath)
 }
 
-func TestNewSegmentedFileSystem_WithExistingSmallWALFile(t *testing.T) {
+func TestNewSegmentedFileSystem_WithExistingMetadata(t *testing.T) {
 	tempDir := createTempDir(t)
 	defer os.RemoveAll(tempDir)
 
-	// Create a small existing WAL file
-	existingFile := filepath.Join(tempDir, "wal_1234567890.log")
-	err := os.WriteFile(existingFile, []byte("small content"), 0644)
+	// Create existing segment file using generateFileName
+	segmentFilename := generateFileName()
+	segmentPath := filepath.Join(tempDir, segmentFilename)
+	err := os.WriteFile(segmentPath, []byte("existing content"), 0644)
+	require.NoError(t, err)
+
+	// Write metadata file
+	metadataFile := filepath.Join(tempDir, "metadata.txt")
+	err = os.WriteFile(metadataFile, []byte(segmentFilename+",100\n"), 0644)
 	require.NoError(t, err)
 
 	fs := NewSegmentedFileSystem(tempDir, 1024)
+	defer fs.Close()
 
 	assert.NotNil(t, fs)
-	assert.Len(t, fs.walFiles, 1)
-	assert.Equal(t, "wal_1234567890.log", fs.walFiles[0])
-	assert.NotNil(t, fs.currentSegment)
-	assert.Equal(t, existingFile, fs.currentSegment.FileName)
+
+	// Should reuse the existing segment since it's small enough
+	currentSegment := fs.currentSegment.Load()
+	assert.NotNil(t, currentSegment)
+	assert.Equal(t, segmentPath, currentSegment.FileName)
+	assert.Equal(t, int64(16), currentSegment.getCurrentSize()) // "existing content" length
 }
 
-func TestNewSegmentedFileSystem_WithExistingLargeWALFile(t *testing.T) {
+func TestNewSegmentedFileSystem_WithLargeExistingSegment(t *testing.T) {
 	tempDir := createTempDir(t)
 	defer os.RemoveAll(tempDir)
 
-	// Create a large existing WAL file that exceeds maxSegmentSize
-	existingFile := filepath.Join(tempDir, "wal_1234567890.log")
-	largeContent := make([]byte, 2048) // Larger than maxSegmentSize
-	err := os.WriteFile(existingFile, largeContent, 0644)
+	// Create large existing segment using generateFileName
+	segmentFilename := generateFileName()
+	segmentPath := filepath.Join(tempDir, segmentFilename)
+	largeContent := make([]byte, 200) // Will exceed maxSegmentSize of 100
+	err := os.WriteFile(segmentPath, largeContent, 0644)
 	require.NoError(t, err)
+
+	// Write metadata file
+	metadataFile := filepath.Join(tempDir, "metadata.txt")
+	err = os.WriteFile(metadataFile, []byte(segmentFilename+",100\n"), 0644)
+	require.NoError(t, err)
+
+	time.Sleep(1 * time.Millisecond)
+	fs := NewSegmentedFileSystem(tempDir, 100) // Small max size
+	defer fs.Close()
+
+	// Should create new segment, not reuse the large one
+	currentSegment := fs.currentSegment.Load()
+	assert.NotNil(t, currentSegment)
+	assert.NotEqual(t, segmentPath, currentSegment.FileName)
+	assert.Equal(t, int64(0), currentSegment.getCurrentSize())
+	// Verify metadata was written correctly for the new segment
+	metadata, err := fs.mm.GetLastWALFileMetadata()
+	require.NoError(t, err)
+	assert.NotEqual(t, segmentFilename, metadata.GetSegmentFilename())
+	assert.Equal(t, uint64(10100), metadata.GetLSNStart())
+}
+
+func TestWriteSync_Basic(t *testing.T) {
+	tempDir := createTempDir(t)
+	defer os.RemoveAll(tempDir)
 
 	fs := NewSegmentedFileSystem(tempDir, 1024)
-
-	assert.NotNil(t, fs)
-	assert.Equal(t, "wal_1234567890.log", fs.walFiles[0])
-	assert.NotNil(t, fs.currentSegment)
-	// Current segment should be a new file, not the large existing one
-	assert.NotEqual(t, existingFile, fs.currentSegment.FileName)
-}
-
-func TestNewSegmentedFileSystem_WithMultipleWALFiles(t *testing.T) {
-	tempDir := createTempDir(t)
-	defer os.RemoveAll(tempDir)
-
-	// Create multiple WAL files with different timestamps
-	files := []string{
-		"wal_1234567890.log",
-		"wal_1234567900.log",
-		"wal_1234567880.log", // Older timestamp
-	}
-
-	for _, file := range files {
-		filePath := filepath.Join(tempDir, file)
-		err := os.WriteFile(filePath, []byte("content"), 0644)
-		require.NoError(t, err)
-	}
-
-	fs := NewSegmentedFileSystem(tempDir, 1024)
-
-	assert.NotNil(t, fs)
-	assert.Len(t, fs.walFiles, 3)
-	// Files should be sorted by timestamp
-	assert.Equal(t, "wal_1234567880.log", fs.walFiles[0])
-	assert.Equal(t, "wal_1234567890.log", fs.walFiles[1])
-	assert.Equal(t, "wal_1234567900.log", fs.walFiles[2])
-}
-
-func TestDiscoverAndSortWALFiles(t *testing.T) {
-	tempDir := createTempDir(t)
-	defer os.RemoveAll(tempDir)
-
-	fs := &SegmentedFileSystem{dataDir: tempDir}
-
-	// Create mixed files (WAL and non-WAL)
-	files := map[string]string{
-		"wal_1000.log":     "wal content",
-		"wal_2000.log":     "wal content",
-		"not_wal.txt":      "not wal",
-		"wal_500.log":      "wal content",
-		"another_file.dat": "other content",
-	}
-
-	for filename, content := range files {
-		filePath := filepath.Join(tempDir, filename)
-		err := os.WriteFile(filePath, []byte(content), 0644)
-		require.NoError(t, err)
-	}
-
-	walFiles, err := fs.discoverAndSortWALFiles()
-
-	require.NoError(t, err)
-	assert.Len(t, walFiles, 3)
-	assert.Equal(t, "wal_500.log", walFiles[0])
-	assert.Equal(t, "wal_1000.log", walFiles[1])
-	assert.Equal(t, "wal_2000.log", walFiles[2])
-}
-
-func TestCanReuseSegment(t *testing.T) {
-	tempDir := createTempDir(t)
-	defer os.RemoveAll(tempDir)
-
-	fs := &SegmentedFileSystem{maxSegmentSize: 100}
-
-	// Test with small file
-	smallFile := filepath.Join(tempDir, "small.log")
-	err := os.WriteFile(smallFile, []byte("small"), 0644)
-	require.NoError(t, err)
-
-	canReuse, err := fs.canReuseSegment(smallFile)
-	require.NoError(t, err)
-	assert.True(t, canReuse)
-
-	// Test with large file
-	largeFile := filepath.Join(tempDir, "large.log")
-	largeContent := make([]byte, 150)
-	err = os.WriteFile(largeFile, largeContent, 0644)
-	require.NoError(t, err)
-
-	canReuse, err = fs.canReuseSegment(largeFile)
-	require.NoError(t, err)
-	assert.False(t, canReuse)
-
-	// Test with non-existent file
-	nonExistentFile := filepath.Join(tempDir, "nonexistent.log")
-	canReuse, err = fs.canReuseSegment(nonExistentFile)
-	assert.Error(t, err)
-	assert.False(t, canReuse)
-}
-
-func TestReuseLastSegment(t *testing.T) {
-	tempDir := createTempDir(t)
-	defer os.RemoveAll(tempDir)
-
-	fs := &SegmentedFileSystem{}
-
-	// Create a file to reuse
-	testFile := filepath.Join(tempDir, "test.log")
-	content := []byte("existing content")
-	err := os.WriteFile(testFile, content, 0644)
-	require.NoError(t, err)
-
-	err = fs.reuseLastSegment(testFile)
-	require.NoError(t, err)
-
-	assert.NotNil(t, fs.currentSegment)
-	assert.Equal(t, testFile, fs.currentSegment.FileName)
-	assert.Equal(t, len(content), fs.currentSegment.currentSize)
-}
-
-func TestWriteSync_NewSegment(t *testing.T) {
-	tempDir := createTempDir(t)
-	defer os.RemoveAll(tempDir)
-
-	fs := NewSegmentedFileSystem(tempDir, 100)
+	defer fs.Close()
 
 	data := []byte("test data")
-	err := fs.WriteSync(data)
+	err := fs.WriteSync(data, 1)
 	require.NoError(t, err)
 
 	// Verify data was written
-	assert.NotNil(t, fs.currentSegment)
-	assert.Equal(t, len(data), fs.currentSegment.currentSize)
+	currentSegment := fs.currentSegment.Load()
+	assert.NotNil(t, currentSegment)
+	assert.Equal(t, int64(len(data)), currentSegment.getCurrentSize())
+
+	// Verify data persistence
+	writtenData, err := os.ReadFile(currentSegment.FileName)
+	require.NoError(t, err)
+	assert.Equal(t, data, writtenData)
 }
 
 func TestWriteSync_SegmentRotation(t *testing.T) {
@@ -189,118 +131,275 @@ func TestWriteSync_SegmentRotation(t *testing.T) {
 	defer os.RemoveAll(tempDir)
 
 	fs := NewSegmentedFileSystem(tempDir, 50) // Small max size
+	defer fs.Close()
 
-	// Write data that will fit
+	// Write small data that fits
 	smallData := []byte("small")
-	err := fs.WriteSync(smallData)
+	err := fs.WriteSync(smallData, 1)
 	require.NoError(t, err)
 
-	// Verify data is actually written to disk
-	assert.NotNil(t, fs.currentSegment)
-	assert.Equal(t, len(smallData), fs.currentSegment.currentSize)
+	firstSegment := fs.currentSegment.Load()
+	assert.NotNil(t, firstSegment)
+	assert.Equal(t, int64(len(smallData)), firstSegment.getCurrentSize())
+	firstSegmentName := firstSegment.FileName
 
-	// Read the file directly from disk to verify persistence
-	writtenData, err := os.ReadFile(fs.currentSegment.FileName)
-	require.NoError(t, err)
-	assert.Equal(t, smallData, writtenData)
-	fileInfo, err := os.Stat(fs.currentSegment.FileName)
-	require.NoError(t, err)
-	assert.Equal(t, int64(len(smallData)), fileInfo.Size())
-	assert.False(t, fileInfo.IsDir())
-
-	firstSegment := fs.currentSegment.FileName
-
-	// Write data that will cause rotation
-	largeData := make([]byte, 60)
-	err = fs.WriteSync(largeData)
+	// Write large data that triggers rotation
+	largeData := make([]byte, 60) // Exceeds maxSegmentSize
+	err = fs.WriteSync(largeData, 2)
 	require.NoError(t, err)
 
-	// Should have rotated to a new segment
-	assert.NotEqual(t, firstSegment, fs.currentSegment.FileName)
-	assert.Equal(t, len(largeData), fs.currentSegment.currentSize)
+	// Should have rotated to new segment
+	newSegment := fs.currentSegment.Load()
+	assert.NotNil(t, newSegment)
+	assert.NotEqual(t, firstSegmentName, newSegment.FileName)
+	assert.Equal(t, int64(len(largeData)), newSegment.getCurrentSize())
+
+	// Verify metadata was updated
+	metadata, err := fs.mm.GetWALFilesMetadata()
+	require.NoError(t, err)
+	assert.Len(t, metadata, 2) // Should have 2 segments now
 }
 
-func TestReadAll_WithExistingFiles(t *testing.T) {
+func TestReadAll_MultipleSegments(t *testing.T) {
 	tempDir := createTempDir(t)
 	defer os.RemoveAll(tempDir)
 
-	// Create test files
-	files := map[string][]byte{
-		"wal_1000.log": []byte("content1"),
-		"wal_2000.log": []byte("content2"),
-		"wal_1500.log": []byte("content3"),
+	fs := NewSegmentedFileSystem(tempDir, 50)
+	defer fs.Close()
+
+	// Write data to multiple segments
+	testData := [][]byte{
+		[]byte("first segment data"),
+		[]byte("second segment data that will cause rotation"),
+		[]byte("third segment"),
 	}
 
-	for filename, content := range files {
-		filePath := filepath.Join(tempDir, filename)
-		err := os.WriteFile(filePath, content, 0644)
+	lsn := uint64(1)
+	for _, data := range testData {
+		err := fs.WriteSync(data, lsn)
 		require.NoError(t, err)
+		lsn++
 	}
 
-	fs := NewSegmentedFileSystem(tempDir, 1024)
-
-	var results [][]byte
+	// Read all data back
+	var readData [][]byte
 	for data, err := range fs.ReadAll() {
 		require.NoError(t, err)
-		if len(data) > 0 { // Skip empty files
-			results = append(results, data)
+		if len(data) > 0 {
+			readData = append(readData, data)
 		}
 	}
 
-	// Should read files in sorted order
-	assert.Len(t, results, 3)
-	assert.Equal(t, []byte("content1"), results[0]) // wal_1000.log
-	assert.Equal(t, []byte("content3"), results[1]) // wal_1500.log
-	assert.Equal(t, []byte("content2"), results[2]) // wal_2000.log
+	// Should read all segments in order
+	assert.Len(t, readData, len(testData))
+	for i, expected := range testData {
+		assert.Equal(t, expected, readData[i])
+	}
 }
 
-func TestSortWALFiles_InvalidTimestamps(t *testing.T) {
+func TestGetSegmentForLSN(t *testing.T) {
 	tempDir := createTempDir(t)
 	defer os.RemoveAll(tempDir)
 
-	fs := &SegmentedFileSystem{}
+	fs := NewSegmentedFileSystem(tempDir, 50)
+	defer fs.Close()
 
-	// Create files with invalid timestamps
-	files := []string{
-		"wal_invalid.log",
-		"wal_123.log",
-		"wal_abc.log",
-	}
+	// Create segments with known LSNs
+	err := fs.WriteSync([]byte("data1"), 100)
+	require.NoError(t, err)
 
-	var entries []os.DirEntry
-	for _, filename := range files {
-		filePath := filepath.Join(tempDir, filename)
-		err := os.WriteFile(filePath, []byte("content"), 0644)
-		require.NoError(t, err)
+	firstSegmentName := fs.currentSegment.Load().FileName
 
-		_, err = os.Stat(filePath)
-		require.NoError(t, err)
-		entries = append(entries, &mockDirEntry{name: filename, isDir: false})
-	}
+	err = fs.WriteSync([]byte("data2 that will cause rotation because it's long"), 200)
+	require.NoError(t, err)
 
-	// Should handle invalid timestamps gracefully with string comparison fallback
-	sortedFiles := fs.sortWALFiles(entries)
-	assert.Len(t, sortedFiles, 3)
-	// Should be sorted lexicographically when numeric parsing fails
-	assert.Equal(t, "wal_123.log", sortedFiles[0])
-	assert.Equal(t, "wal_abc.log", sortedFiles[1])
-	assert.Equal(t, "wal_invalid.log", sortedFiles[2])
+	secondSegmentName := fs.currentSegment.Load().FileName
+
+	// Test LSN lookups
+	segment, err := fs.GetSegmentForLSN(100)
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Base(firstSegmentName), segment)
+
+	segment, err = fs.GetSegmentForLSN(200)
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Base(secondSegmentName), segment)
+
+	// Test LSN that doesn't exist yet - should return current segment
+	segment, err = fs.GetSegmentForLSN(999)
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Base(secondSegmentName), segment)
 }
 
-// Helper functions and mocks
+func TestReadContinuouslyFromSegment_CurrentSegment(t *testing.T) {
+	tempDir := createTempDir(t)
+	defer os.RemoveAll(tempDir)
+
+	fs := NewSegmentedFileSystem(tempDir, 1024)
+	defer fs.Close()
+
+	// Write some initial data
+	initialData := []byte("initial data")
+	err := fs.WriteSync(initialData, 1)
+	require.NoError(t, err)
+
+	currentSegment := fs.currentSegment.Load()
+	segmentName := filepath.Base(currentSegment.FileName)
+
+	// Start goroutine to write additional data 5 times
+	done := make(chan bool)
+	go func() {
+		defer close(done)
+		for i := range 5 {
+			additionalData := []byte(fmt.Sprintf("additional data %d", i+1))
+			err := fs.WriteSync(additionalData, uint64(i+2))
+			if err != nil {
+				t.Logf("Error writing additional data: %v", err)
+				return
+			}
+			time.Sleep(100 * time.Millisecond) // Small delay between writes
+		}
+	}()
+
+	// Read from current segment
+	var readData [][]byte
+	count := 0
+	for data, err := range fs.ReadContinuouslyFromSegment(segmentName) {
+		if err != nil {
+			t.Logf("Error reading: %v", err)
+			break
+		}
+		if len(data) > 0 {
+			readData = append(readData, data)
+		}
+		count++
+		if count > 5 { // Prevent infinite loop in test
+			break
+		}
+	}
+
+	// Should read the initial data and all additional data
+	assert.GreaterOrEqual(t, len(readData), 1)
+	assert.Equal(t, initialData, readData[0])
+
+	// Check that we read all the additional data that was written
+	expectedCount := 6 // initial data + 5 additional writes
+	assert.Equal(t, expectedCount, len(readData))
+
+	// Verify the additional data was read correctly
+	for i := 1; i < len(readData); i++ {
+		expectedData := []byte(fmt.Sprintf("additional data %d", i))
+		assert.Equal(t, expectedData, readData[i], "Data at index %d doesn't match", i)
+	}
+}
+
+func TestSegmentOverflowCheck(t *testing.T) {
+	tempDir := createTempDir(t)
+	defer os.RemoveAll(tempDir)
+
+	fs := NewSegmentedFileSystem(tempDir, 100)
+	defer fs.Close()
+
+	// Write data close to limit
+	data1 := make([]byte, 80)
+	err := fs.WriteSync(data1, 1)
+	require.NoError(t, err)
+
+	firstSegment := fs.currentSegment.Load()
+	firstSegmentName := firstSegment.FileName
+
+	// Write data that will exceed limit
+	data2 := make([]byte, 30) // 80 + 30 > 100
+	err = fs.WriteSync(data2, 2)
+	require.NoError(t, err)
+
+	// Should have rotated
+	newSegment := fs.currentSegment.Load()
+	assert.NotEqual(t, firstSegmentName, newSegment.FileName)
+	assert.Equal(t, int64(len(data2)), newSegment.getCurrentSize())
+}
+
+func TestClose_CleanupResources(t *testing.T) {
+	tempDir := createTempDir(t)
+	defer os.RemoveAll(tempDir)
+
+	fs := NewSegmentedFileSystem(tempDir, 1024)
+
+	// Write some data to ensure segment is open
+	err := fs.WriteSync([]byte("test data"), 1)
+	require.NoError(t, err)
+
+	// Verify segment is open
+	currentSegment := fs.currentSegment.Load()
+	assert.NotNil(t, currentSegment)
+
+	// Close should not error
+	err = fs.Close()
+	assert.NoError(t, err)
+
+	// Should be safe to call close multiple times
+	err = fs.Close()
+	assert.NoError(t, err)
+}
+
+func TestMetadataIntegration(t *testing.T) {
+	tempDir := createTempDir(t)
+	defer os.RemoveAll(tempDir)
+
+	fs := NewSegmentedFileSystem(tempDir, 50)
+	defer fs.Close()
+
+	// Create multiple segments
+	for i := 1; i <= 3; i++ {
+		data := make([]byte, 60) // Force rotation each time
+		err := fs.WriteSync(data, uint64(i+i*100))
+		require.NoError(t, err)
+	}
+
+	// Verify metadata was properly recorded
+	metadata, err := fs.mm.GetWALFilesMetadata()
+	require.NoError(t, err)
+	assert.Len(t, metadata, 4)
+
+	// Verify LSN ordering
+	for i, meta := range metadata {
+		expectedLSN := uint64(i + i*100)
+		assert.Equal(t, expectedLSN, meta.GetLSNStart())
+	}
+
+	// Test last metadata
+	lastMeta, err := fs.mm.GetLastWALFileMetadata()
+	require.NoError(t, err)
+	assert.Equal(t, uint64(303), lastMeta.GetLSNStart())
+}
+
+func TestConcurrentWrites(t *testing.T) {
+	tempDir := createTempDir(t)
+	defer os.RemoveAll(tempDir)
+
+	fs := NewSegmentedFileSystem(tempDir, 1024)
+	defer fs.Close()
+
+	// Test that atomic operations work correctly
+	// (Note: This doesn't test true concurrency since we have single writer assumption,
+	// but tests that atomic operations don't panic)
+
+	for i := 0; i < 10; i++ {
+		data := []byte("concurrent test data")
+		err := fs.WriteSync(data, uint64(i+1))
+		require.NoError(t, err)
+
+		// Verify atomic reads work
+		currentSegment := fs.currentSegment.Load()
+		assert.NotNil(t, currentSegment)
+		size := currentSegment.getCurrentSize()
+		assert.Greater(t, size, int64(0))
+	}
+}
+
+// Helper functions
 
 func createTempDir(t *testing.T) string {
 	tempDir, err := os.MkdirTemp("", "segmented_fs_test_*")
 	require.NoError(t, err)
 	return tempDir
 }
-
-type mockDirEntry struct {
-	name  string
-	isDir bool
-}
-
-func (m *mockDirEntry) Name() string               { return m.name }
-func (m *mockDirEntry) IsDir() bool                { return m.isDir }
-func (m *mockDirEntry) Type() os.FileMode          { return 0 }
-func (m *mockDirEntry) Info() (os.FileInfo, error) { return nil, nil }
