@@ -287,8 +287,140 @@ func TestReadContinuouslyFromSegment_CurrentSegment(t *testing.T) {
 
 	// Verify the additional data was read correctly
 	for i := 1; i < len(readData); i++ {
-		expectedData := []byte(fmt.Sprintf("additional data %d", i))
+		expectedData := fmt.Appendf(nil, "additional data %d", i)
 		assert.Equal(t, expectedData, readData[i], "Data at index %d doesn't match", i)
+	}
+}
+
+func TestReadContinuouslyFromSegment_WithRotation(t *testing.T) {
+	tempDir := createTempDir(t)
+	defer os.RemoveAll(tempDir)
+
+	fs := NewSegmentedFileSystem(tempDir, 60) // Small segment size to force rotation
+	defer fs.Close()
+
+	// Write initial data to get the first segment
+	initialData := []byte("initial segment data")
+	err := fs.WriteSync(initialData, 1)
+	require.NoError(t, err)
+
+	// Get the initial segment name
+	initialSegment := fs.currentSegment.Load()
+	initialSegmentName := filepath.Base(initialSegment.FileName)
+
+	// Channel to collect all read data and coordinate with reader
+	readDataChan := make(chan []byte, 100)
+	readerErrorChan := make(chan error, 1)
+	readerDone := make(chan bool)
+
+	// Start continuous reader in goroutine
+	go func() {
+		defer close(readerDone)
+
+		count := 0
+		for data, err := range fs.ReadContinuouslyFromSegment(initialSegmentName) {
+			if err != nil {
+				readerErrorChan <- err
+				return
+			}
+			if len(data) > 0 {
+				readDataChan <- data
+			}
+
+			count++
+			// Number of writes to test
+			if count == 5 {
+				break
+			}
+		}
+	}()
+
+	// Give reader time to start and read initial data
+	time.Sleep(50 * time.Millisecond)
+
+	// Write data that will cause segment rotation
+	rotationData1 := []byte("data that causes rotation because it's quite long")
+	err = fs.WriteSync(rotationData1, 2)
+	require.NoError(t, err)
+
+	// Verify we rotated to a new segment
+	newSegment := fs.currentSegment.Load()
+	newSegmentName := filepath.Base(newSegment.FileName)
+	assert.NotEqual(t, initialSegmentName, newSegmentName)
+
+	// Write more data to the new segment
+	time.Sleep(50 * time.Millisecond)
+	newSegmentData1 := []byte("new segment data 1")
+	err = fs.WriteSync(newSegmentData1, 3)
+	require.NoError(t, err)
+
+	time.Sleep(50 * time.Millisecond)
+	newSegmentData2 := []byte("new segment data 2")
+	err = fs.WriteSync(newSegmentData2, 4)
+	require.NoError(t, err)
+
+	// Give reader time to catch up
+	time.Sleep(200 * time.Millisecond)
+
+	// Force rotation again with more data
+	finalRotationData := []byte("final data to cause another rotation and test multiple transitions")
+	err = fs.WriteSync(finalRotationData, 5)
+	require.NoError(t, err)
+
+	// Give reader more time to read all data
+	time.Sleep(300 * time.Millisecond)
+
+	// Stop the reader and collect results
+	close(readDataChan)
+
+	// Wait for reader to finish or timeout
+	select {
+	case <-readerDone:
+		// Reader finished normally
+	case <-time.After(2 * time.Second):
+		t.Fatal("Reader goroutine didn't finish in time")
+	}
+
+	// Check for reader errors
+	select {
+	case err := <-readerErrorChan:
+		t.Fatalf("Reader encountered error: %v", err)
+	default:
+		// No errors
+	}
+
+	// Collect all read data
+	var allReadData [][]byte
+	for data := range readDataChan {
+		allReadData = append(allReadData, data)
+	}
+
+	// Verify we read data from multiple segments
+	assert.GreaterOrEqual(t, len(allReadData), 3, "Should have read data from multiple writes")
+
+	// Verify the initial data was read
+	assert.Equal(t, initialData, allReadData[0], "First read should be initial data")
+
+	// Verify we can find the rotation data and new segment data
+	allDataStr := ""
+	for _, data := range allReadData {
+		allDataStr += string(data)
+	}
+
+	assert.Contains(t, allDataStr, string(initialData), "Should contain initial data")
+	assert.Contains(t, allDataStr, string(rotationData1), "Should contain rotation-triggering data")
+	assert.Contains(t, allDataStr, string(newSegmentData1), "Should contain new segment data 1")
+	assert.Contains(t, allDataStr, string(newSegmentData2), "Should contain new segment data 2")
+
+	// Verify metadata shows multiple segments were created
+	metadata, err := fs.mm.GetWALFilesMetadata()
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, len(metadata), 3, "Should have created multiple segments")
+
+	// Verify LSN progression
+	for i := 1; i < len(metadata); i++ {
+		assert.Greater(t, metadata[i].GetLSNStart(), metadata[i-1].GetLSNStart(),
+			"LSNs should be increasing across segments")
 	}
 }
 
@@ -383,7 +515,7 @@ func TestConcurrentWrites(t *testing.T) {
 	// (Note: This doesn't test true concurrency since we have single writer assumption,
 	// but tests that atomic operations don't panic)
 
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		data := []byte("concurrent test data")
 		err := fs.WriteSync(data, uint64(i+1))
 		require.NoError(t, err)

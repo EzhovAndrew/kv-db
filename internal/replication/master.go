@@ -30,7 +30,7 @@ type MasterState struct {
 }
 
 type LogIteration struct {
-	log *wal.Log
+	log *wal.LogEntry
 	err error
 }
 
@@ -216,7 +216,7 @@ func (rm *ReplicationManager) removeSlave(masterState *MasterState, slaveID stri
 	})
 }
 
-func (rm *ReplicationManager) getLogsChan(ctx context.Context, logIterator iter.Seq2[*wal.Log, error]) <-chan LogIteration {
+func (rm *ReplicationManager) getLogsChan(ctx context.Context, logIterator iter.Seq2[*wal.LogEntry, error]) <-chan LogIteration {
 	logChan := make(chan LogIteration, 100)
 	go func() {
 		defer close(logChan)

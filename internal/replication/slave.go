@@ -175,11 +175,11 @@ func (rm *ReplicationManager) validateLogBatch(batch *LogBatch) error {
 }
 
 // convertToWALLogs converts LogEvents to WAL Log structures
-func (rm *ReplicationManager) convertToWALLogs(events []LogEvent) []*wal.Log {
-	logs := make([]*wal.Log, len(events))
+func (rm *ReplicationManager) convertToWALLogs(events []LogEvent) []*wal.LogEntry {
+	logs := make([]*wal.LogEntry, len(events))
 
 	for i, event := range events {
-		logs[i] = &wal.Log{
+		logs[i] = &wal.LogEntry{
 			LSN:       event.LSN,
 			Command:   event.CmdID,
 			Arguments: event.Args,
@@ -190,7 +190,7 @@ func (rm *ReplicationManager) convertToWALLogs(events []LogEvent) []*wal.Log {
 }
 
 // applyToStorage applies logs to the storage engine
-func (rm *ReplicationManager) applyToStorage(logs []*wal.Log) error {
+func (rm *ReplicationManager) applyToStorage(logs []*wal.LogEntry) error {
 	if rm.storageApplier == nil {
 		return fmt.Errorf("storage applier not configured")
 	}

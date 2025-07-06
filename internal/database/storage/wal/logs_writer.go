@@ -24,7 +24,7 @@ func NewFileLogsWriter(fileSystem FileSystemWriteSyncer) *FileLogsWriter {
 	return &FileLogsWriter{filesystem: fileSystem, buf: buf}
 }
 
-func (l *FileLogsWriter) Write(logs []*Log) (err error) {
+func (l *FileLogsWriter) Write(logs []*LogEntry) (err error) {
 	if len(logs) == 0 {
 		return nil
 	}
@@ -41,9 +41,14 @@ func (l *FileLogsWriter) Write(logs []*Log) (err error) {
 		}
 	}()
 
-	l.buf.Reset()
 	for _, log := range logs {
+		if log == nil {
+			return errors.New("log entry cannot be nil")
+		}
 		encoders.EncodeLog(log, l.buf)
 	}
-	return l.filesystem.WriteSync(l.buf.Bytes(), logs[0].LSN)
+
+	err = l.filesystem.WriteSync(l.buf.Bytes(), logs[0].LSN)
+	l.buf.Reset()
+	return err
 }

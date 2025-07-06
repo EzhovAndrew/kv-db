@@ -23,12 +23,12 @@ type LogBatch struct {
 }
 
 type StorageApplier interface {
-	ApplyLogs(logs []*wal.Log) error
+	ApplyLogs(logs []*wal.LogEntry) error
 	GetLastLSN() uint64
 }
 
 type LogsReader interface {
-	ReadLogsFromLSN(ctx context.Context, lsn uint64) iter.Seq2[*wal.Log, error]
+	ReadLogsFromLSN(ctx context.Context, lsn uint64) iter.Seq2[*wal.LogEntry, error]
 }
 
 type ReplicationManager struct {

@@ -24,8 +24,8 @@ func NewFileLogsReader(fileSystem FileSystemReader) *FileLogsReader {
 	return &FileLogsReader{filesystem: fileSystem}
 }
 
-func (l *FileLogsReader) Read() iter.Seq2[*Log, error] {
-	return func(yield func(*Log, error) bool) {
+func (l *FileLogsReader) Read() iter.Seq2[*LogEntry, error] {
+	return func(yield func(*LogEntry, error) bool) {
 		for data, err := range l.filesystem.ReadAll() {
 			if err != nil {
 				if !yield(nil, err) {
@@ -46,8 +46,8 @@ func (l *FileLogsReader) Read() iter.Seq2[*Log, error] {
 	}
 }
 
-func (l *FileLogsReader) ReadFromLSN(ctx context.Context, lsn uint64) iter.Seq2[*Log, error] {
-	return func(yield func(*Log, error) bool) {
+func (l *FileLogsReader) ReadFromLSN(ctx context.Context, lsn uint64) iter.Seq2[*LogEntry, error] {
+	return func(yield func(*LogEntry, error) bool) {
 		if ctx.Err() != nil {
 			if !yield(nil, ctx.Err()) {
 				return
@@ -73,7 +73,7 @@ func (l *FileLogsReader) ReadFromLSN(ctx context.Context, lsn uint64) iter.Seq2[
 				}
 				continue
 			}
-			if err := l.processData(data, yield); err != nil {
+			if err := l.processDataFromLSN(data, lsn, ctx, yield); err != nil {
 				if !yield(nil, err) {
 					return
 				}
@@ -82,10 +82,27 @@ func (l *FileLogsReader) ReadFromLSN(ctx context.Context, lsn uint64) iter.Seq2[
 	}
 }
 
-func (l *FileLogsReader) processData(data []byte, yield func(*Log, error) bool) error {
+func (l *FileLogsReader) processData(data []byte, yield func(*LogEntry, error) bool) error {
+	return l.processDataWithOptions(data, yield, nil, 0)
+}
+
+func (l *FileLogsReader) processDataFromLSN(data []byte, lsn uint64, ctx context.Context, yield func(*LogEntry, error) bool) error {
+	return l.processDataWithOptions(data, yield, ctx, lsn)
+}
+
+func (l *FileLogsReader) processDataWithOptions(data []byte, yield func(*LogEntry, error) bool, ctx context.Context, minLSN uint64) error {
 	buf := bytes.NewReader(data)
 
 	for buf.Len() > 0 {
+		// Check context cancellation per log for better responsiveness (if context provided)
+		if ctx != nil {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+		}
+
 		log, bytesRead, err := encoders.DecodeLog(buf)
 		if err == io.EOF {
 			break
@@ -97,6 +114,11 @@ func (l *FileLogsReader) processData(data []byte, yield func(*Log, error) bool) 
 			// Prevent infinite loop if no bytes were consumed
 			logging.Error("No bytes consumed during log decoding, stopping to prevent infinite loop")
 			break
+		}
+
+		// Filter by LSN if minLSN is specified (> 0)
+		if minLSN > 0 && log.LSN < minLSN {
+			continue // Skip logs with LSN below minimum
 		}
 
 		if !yield(log, nil) {

@@ -18,9 +18,9 @@ type Storage interface {
 	Shutdown()
 
 	// for replication purposes
-	ApplyLogs(logs []*wal.Log) error
+	ApplyLogs(logs []*wal.LogEntry) error
 	GetLastLSN() uint64
-	ReadLogsFromLSN(ctx context.Context, lsn uint64) iter.Seq2[*wal.Log, error]
+	ReadLogsFromLSN(ctx context.Context, lsn uint64) iter.Seq2[*wal.LogEntry, error]
 }
 
 type Database struct {
@@ -99,7 +99,7 @@ func (db *Database) Shutdown() {
 }
 
 // for replication purposes
-func (db *Database) ApplyLogs(logs []*wal.Log) error {
+func (db *Database) ApplyLogs(logs []*wal.LogEntry) error {
 	return db.storage.ApplyLogs(logs)
 }
 
@@ -107,6 +107,6 @@ func (db *Database) GetLastLSN() uint64 {
 	return db.storage.GetLastLSN()
 }
 
-func (db *Database) ReadLogsFromLSN(ctx context.Context, lsn uint64) iter.Seq2[*wal.Log, error] {
+func (db *Database) ReadLogsFromLSN(ctx context.Context, lsn uint64) iter.Seq2[*wal.LogEntry, error] {
 	return db.storage.ReadLogsFromLSN(ctx, lsn)
 }

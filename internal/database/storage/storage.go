@@ -27,16 +27,16 @@ type Engine interface {
 }
 
 type WAL interface {
-	Recover() iter.Seq2[*wal.Log, error]
-	Set(key string, value string) uint64
-	Delete(key string) uint64
+	Recover() iter.Seq2[*wal.LogEntry, error]
+	Set(key string, value string) *wal.Future
+	Delete(key string) *wal.Future
 	Shutdown()
 	SetLastLSN(lsn uint64)
 
 	// for replication purposes
 	GetLastLSN() uint64
-	WriteLogs(logs []*wal.Log) error
-	ReadLogsFromLSN(ctx context.Context, lsn uint64) iter.Seq2[*wal.Log, error]
+	WriteLogs(logs []*wal.LogEntry) error
+	ReadLogsFromLSN(ctx context.Context, lsn uint64) iter.Seq2[*wal.LogEntry, error]
 }
 
 type Storage struct {
@@ -82,7 +82,11 @@ func (s *Storage) Set(ctx context.Context, key, value string) error {
 		return ctx.Err()
 	}
 	if s.wal != nil {
-		lsn := s.wal.Set(key, value)
+		future := s.wal.Set(key, value)
+		lsn, err := future.Wait()
+		if err != nil {
+			return err
+		}
 		ctx = utils.ContextWithLSN(ctx, lsn)
 	}
 
@@ -94,7 +98,11 @@ func (s *Storage) Delete(ctx context.Context, key string) error {
 		return ctx.Err()
 	}
 	if s.wal != nil {
-		lsn := s.wal.Delete(key)
+		future := s.wal.Delete(key)
+		lsn, err := future.Wait()
+		if err != nil {
+			return err
+		}
 		ctx = utils.ContextWithLSN(ctx, lsn)
 	}
 
@@ -108,7 +116,7 @@ func (s *Storage) Shutdown() {
 	s.wal.Shutdown()
 }
 
-func (s *Storage) applyLogToEngine(log *wal.Log) error {
+func (s *Storage) applyLogToEngine(log *wal.LogEntry) error {
 	switch log.Command {
 	case compute.SetCommandID:
 		err := s.engine.Set(context.Background(), log.Arguments[0], log.Arguments[1])
@@ -148,7 +156,7 @@ func (s *Storage) recover() error {
 
 // for REPLICATION purposes
 
-func (s *Storage) ApplyLogs(logs []*wal.Log) error {
+func (s *Storage) ApplyLogs(logs []*wal.LogEntry) error {
 	s.engine.DisableLSNOrdering()
 	if err := s.wal.WriteLogs(logs); err != nil {
 		return err
@@ -166,6 +174,6 @@ func (s *Storage) GetLastLSN() uint64 {
 	return s.wal.GetLastLSN()
 }
 
-func (s *Storage) ReadLogsFromLSN(ctx context.Context, lsn uint64) iter.Seq2[*wal.Log, error] {
+func (s *Storage) ReadLogsFromLSN(ctx context.Context, lsn uint64) iter.Seq2[*wal.LogEntry, error] {
 	return s.wal.ReadLogsFromLSN(ctx, lsn)
 }
