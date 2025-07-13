@@ -286,7 +286,9 @@ func TestWAL_SetLastLSN(t *testing.T) {
 	mockWriter := &mockLogsWriter{}
 	wal.logsWriter = mockWriter
 
-	lsn := wal.Set("key", "value")
+	future := wal.Set("key", "value")
+	lsn, err := future.Wait()
+	assert.NoError(t, err)
 	assert.Equal(t, uint64(101), lsn)
 }
 
@@ -311,11 +313,11 @@ func TestWAL_ConcurrentOperations(t *testing.T) {
 	lsnChan := make(chan uint64, numGoroutines*operationsPerGoroutine)
 
 	// Start concurrent operations
-	for i := 0; i < numGoroutines; i++ {
+	for i := range numGoroutines {
 		wg.Add(1)
 		go func(goroutineID int) {
 			defer wg.Done()
-			for j := 0; j < operationsPerGoroutine; j++ {
+			for j := range operationsPerGoroutine {
 				if j%2 == 0 {
 					future := wal.Set("key", "value")
 					lsn, err := future.Wait()
@@ -384,6 +386,10 @@ func TestWAL_ShutdownWithPendingBatch(t *testing.T) {
 	// Verify pending logs were written during shutdown
 	writtenLogs := mockWriter.getWrittenLogs()
 	assert.Equal(t, 2, len(writtenLogs))
+	assert.Equal(t, compute.SetCommandID, writtenLogs[0].Command)
+	assert.Equal(t, compute.SetCommandID, writtenLogs[1].Command)
+	assert.Equal(t, []string{"key1", "value1"}, writtenLogs[0].Arguments)
+	assert.Equal(t, []string{"key2", "value2"}, writtenLogs[1].Arguments)
 }
 
 func TestWAL_EmptyBatchFlush(t *testing.T) {
@@ -554,15 +560,17 @@ func TestWAL_MixedOperations(t *testing.T) {
 
 	// Verify command types
 	assert.Equal(t, compute.SetCommandID, writtenLogs[0].Command)
+	assert.Equal(t, []string{"key1", "value1"}, writtenLogs[0].Arguments)
 	assert.Equal(t, compute.DelCommandID, writtenLogs[1].Command)
+	assert.Equal(t, []string{"key2"}, writtenLogs[1].Arguments)
 	assert.Equal(t, compute.SetCommandID, writtenLogs[2].Command)
+	assert.Equal(t, []string{"key3", "value3"}, writtenLogs[2].Arguments)
 	assert.Equal(t, compute.DelCommandID, writtenLogs[3].Command)
+	assert.Equal(t, []string{"key4"}, writtenLogs[3].Arguments)
 	assert.Equal(t, compute.SetCommandID, writtenLogs[4].Command)
+	assert.Equal(t, []string{"key5", "value5"}, writtenLogs[4].Arguments)
 }
 
-// CRITICAL BUG TESTS - Testing the fixes made to WAL implementation
-
-// Test that flush errors don't send responses to clients (CRITICAL FIX)
 func TestWAL_FlushErrorHandling(t *testing.T) {
 	cfg := &configuration.WALConfig{
 		FlushBatchSize:    2,
@@ -584,16 +592,16 @@ func TestWAL_FlushErrorHandling(t *testing.T) {
 	go func() {
 		future := wal.Set("key1", "value1")
 		lsn, err := future.Wait()
-		assert.Error(t, err)            // Should get error on failure
-		assert.Equal(t, uint64(0), lsn) // LSN should be 0 on failure
+		assert.Error(t, err) // Should get error on failure
+		assert.Equal(t, uint64(0), lsn)
 		done <- true
 	}()
 
 	go func() {
 		future := wal.Set("key2", "value2") // This will trigger flush
 		lsn, err := future.Wait()
-		assert.Error(t, err)            // Should get error on failure
-		assert.Equal(t, uint64(0), lsn) // LSN should be 0 on failure
+		assert.Error(t, err) // Should get error on failure
+		assert.Equal(t, uint64(0), lsn)
 		done <- true
 	}()
 
@@ -614,7 +622,6 @@ func TestWAL_FlushErrorHandling(t *testing.T) {
 	assert.Equal(t, 0, len(mockWriter.getWrittenLogs())) // No logs should be written on error
 }
 
-// Test shutdown race condition fix (CRITICAL FIX)
 func TestWAL_ShutdownRaceCondition(t *testing.T) {
 	cfg := &configuration.WALConfig{
 		FlushBatchSize:    10,
@@ -627,7 +634,7 @@ func TestWAL_ShutdownRaceCondition(t *testing.T) {
 
 	// Start multiple goroutines calling shutdown simultaneously
 	var wg sync.WaitGroup
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -636,11 +643,9 @@ func TestWAL_ShutdownRaceCondition(t *testing.T) {
 	}
 
 	wg.Wait()
-	// If we get here without panic, the race condition is fixed
 	assert.True(t, wal.closed)
 }
 
-// Test that Set/Delete operations don't block during shutdown (CRITICAL FIX)
 func TestWAL_OperationsDuringShutdown(t *testing.T) {
 	cfg := &configuration.WALConfig{
 		FlushBatchSize:    10,
@@ -658,19 +663,17 @@ func TestWAL_OperationsDuringShutdown(t *testing.T) {
 
 	go func() {
 		future := wal.Set("key1", "value1")
-		lsn, err := future.Wait()
-		// Should get error because of shutdown
-		assert.Error(t, err)
-		assert.Equal(t, uint64(0), lsn)
+		_, err := future.Wait()
+		// Should be flushed during shutdown
+		assert.NoError(t, err)
 		done <- true
 	}()
 
 	go func() {
 		future := wal.Delete("key2")
-		lsn, err := future.Wait()
-		// Should get error because of shutdown
-		assert.Error(t, err)
-		assert.Equal(t, uint64(0), lsn)
+		_, err := future.Wait()
+		// Should be flushed during shutdown
+		assert.NoError(t, err)
 		done <- true
 	}()
 
@@ -689,9 +692,19 @@ func TestWAL_OperationsDuringShutdown(t *testing.T) {
 			t.Fatal("Operations are blocking during shutdown")
 		}
 	}
+
+	// After shutdown, Set and Delete should return error immediately
+	future := wal.Set("key3", "value3")
+	lsn, err := future.Wait()
+	assert.Error(t, err, ErrWALShuttingDown)
+	assert.Zero(t, lsn, "LSN should be zero on error")
+
+	future = wal.Delete("key4")
+	lsn, err = future.Wait()
+	assert.Error(t, err, ErrWALShuttingDown)
+	assert.Zero(t, lsn, "LSN should be zero on error")
 }
 
-// Test WriteLogs maintains single-writer guarantee (CRITICAL FIX)
 func TestWAL_WriteLogsUsesNormalBatching(t *testing.T) {
 	cfg := &configuration.WALConfig{
 		FlushBatchSize:    1, // Small batch size for immediate flushing
@@ -726,7 +739,64 @@ func TestWAL_WriteLogsUsesNormalBatching(t *testing.T) {
 	assert.Equal(t, uint64(101), writtenLogs[1].LSN)
 }
 
-// Mock implementations for testing
+// Test single-writer guarantee
+func TestWAL_WriteLogsAndSetDelAreBatchedTogether(t *testing.T) {
+	cfg := &configuration.WALConfig{
+		FlushBatchSize:    5,
+		FlushBatchTimeout: 1000000, // Large timeout to avoid auto-flush
+		MaxSegmentSize:    1024,
+		DataDirectory:     t.TempDir(),
+	}
+
+	wal := NewWAL(cfg)
+	defer wal.Shutdown()
+
+	mockWriter := &mockLogsWriter{}
+	wal.logsWriter = mockWriter
+
+	// Prepare 2 logs for WriteLogs
+	writeLogs := []*LogEntry{
+		{LSN: 200, Command: compute.SetCommandID, Arguments: []string{"k1", "v1"}},
+		{LSN: 201, Command: compute.SetCommandID, Arguments: []string{"k2", "v2"}},
+	}
+
+	// Call WriteLogs (should be batched)
+	err := wal.WriteLogs(writeLogs)
+	assert.NoError(t, err)
+
+	// Now add 3 more operations via Set/Del
+	f1 := wal.Set("k3", "v3")
+	f2 := wal.Set("k4", "v4")
+	f3 := wal.Delete("k5")
+
+	// Wait for all futures to complete (should only complete after batch flush)
+	_, err1 := f1.Wait()
+	_, err2 := f2.Wait()
+	_, err3 := f3.Wait()
+	assert.NoError(t, err1)
+	assert.NoError(t, err2)
+	assert.NoError(t, err3)
+
+	// Allow time for processing
+	time.Sleep(100 * time.Millisecond)
+
+	// All 5 logs should be flushed as a single batch
+	writtenLogs := mockWriter.getWrittenLogs()
+	assert.Equal(t, 5, len(writtenLogs), "All 5 logs should be flushed together")
+
+	// The first two logs should be the ones from WriteLogs
+	assert.Equal(t, uint64(200), writtenLogs[0].LSN)
+	assert.Equal(t, uint64(201), writtenLogs[1].LSN)
+
+	// The next three should be Set/Set/Del, in order
+	assert.Equal(t, compute.SetCommandID, writtenLogs[2].Command)
+	assert.Equal(t, "k3", writtenLogs[2].Arguments[0])
+	assert.Equal(t, compute.SetCommandID, writtenLogs[3].Command)
+	assert.Equal(t, "k4", writtenLogs[3].Arguments[0])
+	assert.Equal(t, compute.DelCommandID, writtenLogs[4].Command)
+	assert.Equal(t, "k5", writtenLogs[4].Arguments[0])
+}
+
 type mockLogsWriter struct {
 	writeCalled bool
 	writeError  error
