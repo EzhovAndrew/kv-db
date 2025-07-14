@@ -36,7 +36,6 @@ var (
 	ErrInvalidTotalCount        = errors.New("invalid total count")
 	ErrEmptyEventsList          = errors.New("empty events list")
 	ErrEventCountExceedsTotal   = errors.New("events count exceeds total")
-	ErrInvalidLSNInEvent        = errors.New("invalid LSN in event")
 	ErrEmptyArgsInEvent         = errors.New("empty args in event")
 	ErrInvalidCommandID         = errors.New("invalid command ID in event")
 )
@@ -194,10 +193,6 @@ func (rm *ReplicationManager) validateLogBatch(batch *LogBatch) error {
 
 	// Validate each event
 	for i, event := range batch.Events {
-		if event.LSN == 0 {
-			return fmt.Errorf("%w %d: %d", ErrInvalidLSNInEvent, i, event.LSN)
-		}
-
 		if len(event.Args) == 0 {
 			return fmt.Errorf("%w %d", ErrEmptyArgsInEvent, i)
 		}
