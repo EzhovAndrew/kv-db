@@ -38,6 +38,7 @@ type ReplicationManager struct {
 	client         *network.TCPClient
 	storageApplier StorageApplier
 	logsReader     LogsReader
+	masterState    *MasterState // Master state for tracking slaves
 }
 
 func NewReplicationManager(cfg *configuration.Config) *ReplicationManager {

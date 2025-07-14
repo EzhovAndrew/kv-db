@@ -26,6 +26,7 @@ type ReplicationConfig struct {
 	Role          string `yaml:"role" validate:"required,oneof=master slave"`
 	MasterAddress string `yaml:"master_address" validate:"required_if=Role slave"`
 	MasterPort    string `yaml:"master_port" validate:"required_if=Role slave"`
+	SlaveID       string `yaml:"slave_id"` // Optional: persistent slave identity
 }
 
 type LoggingConfig struct {

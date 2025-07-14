@@ -511,6 +511,8 @@ func TestStorage_ApplyLogs_EmptyLogs(t *testing.T) {
 		wal:    new(MockWAL),
 	}
 
+	assert.NotNil(t, storage.engine)
+	assert.NotNil(t, storage.wal)
 	err := storage.ApplyLogs([]*wal.LogEntry{})
 	assert.Error(t, err)
 	assert.Equal(t, ErrEmptyLogs, err)
@@ -786,37 +788,4 @@ func TestStorage_handleWALOperation_WithoutWAL(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, ctx, resultCtx)
-}
-
-func TestStorage_handleWALOperation_Structure(t *testing.T) {
-	// This test verifies the structure and basic functionality
-	storage := &Storage{
-		engine: new(MockEngine),
-		wal:    new(MockWAL),
-	}
-
-	// Verify storage has both engine and WAL
-	assert.NotNil(t, storage.engine)
-	assert.NotNil(t, storage.wal)
-
-	// The actual WAL operation testing would require complex mocking
-	// For now, we verify the basic structure is correct
-}
-
-func TestStorage_Future_ErrorHandling(t *testing.T) {
-	// This test demonstrates error handling structure
-	future := createMockFuture(0, errors.New("WAL operation error"))
-
-	// Verify the mock future behaves correctly
-	assert.NotNil(t, future)
-	assert.Equal(t, "WAL operation error", future.Error().Error())
-	assert.Equal(t, uint64(0), future.LSN())
-
-	// Test that the future is already completed
-	select {
-	case <-future.Done():
-		// Expected - future should be completed
-	default:
-		t.Error("Future should be completed")
-	}
 }

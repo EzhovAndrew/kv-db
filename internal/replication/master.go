@@ -3,6 +3,7 @@ package replication
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"iter"
 	"net"
@@ -15,6 +16,24 @@ import (
 	"github.com/EzhovAndrew/kv-db/internal/logging"
 	"github.com/EzhovAndrew/kv-db/internal/network"
 	"go.uber.org/zap"
+)
+
+// Master replication constants
+const (
+	DefaultMasterPort            = "3333"
+	ReplicationMessageMultiplier = 100 * 2 // Large enough for batches
+	ReplicationIdleMultiplier    = 10      // Longer timeout for replication
+	MaxSlaveConnections          = 100     // Support multiple slaves
+	BatchTimeoutMs               = 20      // Batch timeout in milliseconds
+	MaxBatchSize                 = 50      // Maximum logs per batch
+)
+
+// Master replication errors
+var (
+	ErrInvalidLSNSyncMsg     = errors.New("invalid LSN sync message")
+	ErrExpectedLSNSyncMsg    = errors.New("expected lsn_sync message")
+	ErrInvalidLastLSN        = errors.New("invalid last_lsn")
+	ErrMarshalResponseFailed = errors.New("failed to marshal response")
 )
 
 type SlaveConnection struct {
@@ -47,16 +66,16 @@ func (rm *ReplicationManager) startMaster(ctx context.Context) {
 	}
 
 	if rm.cfg.Replication.MasterPort == "" {
-		rm.cfg.Replication.MasterPort = "3333"
+		rm.cfg.Replication.MasterPort = DefaultMasterPort
 	}
 
 	// Create network configuration for replication server
 	replicationCfg := &configuration.NetworkConfig{
 		Ip:                      rm.cfg.Replication.MasterAddress,
 		Port:                    rm.cfg.Replication.MasterPort,
-		MaxMessageSize:          rm.cfg.Network.MaxMessageSize * 100 * 2, // Large enough for batches
-		IdleTimeout:             rm.cfg.Network.IdleTimeout * 10,         // Longer timeout for replication
-		MaxConnections:          100,                                     // Support multiple slaves
+		MaxMessageSize:          rm.cfg.Network.MaxMessageSize * ReplicationMessageMultiplier,
+		IdleTimeout:             rm.cfg.Network.IdleTimeout * ReplicationIdleMultiplier,
+		MaxConnections:          MaxSlaveConnections,
 		GracefulShutdownTimeout: rm.cfg.Network.GracefulShutdownTimeout,
 	}
 
@@ -69,6 +88,9 @@ func (rm *ReplicationManager) startMaster(ctx context.Context) {
 	masterState := &MasterState{
 		slaves: make(map[string]*SlaveConnection),
 	}
+
+	// Store master state for access by other methods
+	rm.masterState = masterState
 
 	go server.HandleStreamRequests(ctx, func(ctx context.Context, initialData []byte) iter.Seq2[[]byte, error] {
 		return rm.handleSlaveConnection(ctx, initialData, masterState)
@@ -84,53 +106,97 @@ func (rm *ReplicationManager) startMaster(ctx context.Context) {
 
 func (rm *ReplicationManager) handleSlaveConnection(ctx context.Context, initialData []byte, masterState *MasterState) iter.Seq2[[]byte, error] {
 	return func(yield func([]byte, error) bool) {
-		// Parse initial LSN sync message from slave
-		var lsnSync map[string]interface{}
-		if err := json.Unmarshal(initialData, &lsnSync); err != nil {
-			logging.Error("Failed to parse LSN sync message", zap.Error(err))
-			yield(nil, fmt.Errorf("invalid LSN sync message: %w", err))
+		slave, err := rm.parseSlaveHandshake(initialData)
+		if err != nil {
+			logging.Error("Failed to parse slave handshake", zap.Error(err))
+			yield(nil, err)
 			return
 		}
 
-		// Validate LSN sync message
-		if lsnSync["type"] != "lsn_sync" {
-			logging.Error("Invalid message type", zap.Any("type", lsnSync["type"]))
-			yield(nil, fmt.Errorf("expected lsn_sync message"))
-			return
-		}
-
-		lastLSN, ok := lsnSync["last_lsn"].(float64) // JSON numbers are float64
-		if !ok {
-			logging.Error("Invalid last_lsn in sync message")
-			yield(nil, fmt.Errorf("invalid last_lsn"))
-			return
-		}
-
-		slave := rm.NewSlaveWithLSN(uint64(lastLSN))
-
-		concurrency.WithLock(&masterState.mu, func() error {
-			masterState.slaves[slave.ID] = slave
-			return nil
-		})
+		rm.registerSlave(masterState, slave)
 
 		logging.Info("Slave connected",
 			zap.String("slave_id", slave.ID),
 			zap.Uint64("last_lsn", slave.LastLSN))
 
-		if !yield([]byte("OK"), nil) {
+		if !rm.sendHandshakeResponse(yield, slave, initialData) {
 			rm.removeSlave(masterState, slave.ID)
 			return
 		}
 
-		rm.streamLogsToSlave(ctx, slave, masterState, yield)
+		rm.streamLogsToSlave(ctx, slave, yield)
 
 		rm.removeSlave(masterState, slave.ID)
 		logging.Info("Slave disconnected", zap.String("slave_id", slave.ID))
 	}
 }
 
-func (rm *ReplicationManager) streamLogsToSlave(ctx context.Context, slave *SlaveConnection, masterState *MasterState, yield func([]byte, error) bool) {
+// parseSlaveHandshake parses initial LSN sync message and creates SlaveConnection
+func (rm *ReplicationManager) parseSlaveHandshake(initialData []byte) (*SlaveConnection, error) {
+	var lsnSync map[string]any
+	if err := json.Unmarshal(initialData, &lsnSync); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidLSNSyncMsg, err)
+	}
 
+	// Validate LSN sync message
+	if lsnSync["type"] != "lsn_sync" {
+		return nil, ErrExpectedLSNSyncMsg
+	}
+
+	lastLSN, ok := lsnSync["last_lsn"].(float64) // JSON numbers are float64
+	if !ok {
+		return nil, ErrInvalidLastLSN
+	}
+
+	slaveID := rm.extractOrGenerateSlaveID(lsnSync, uint64(lastLSN))
+
+	return &SlaveConnection{
+		ID:      slaveID,
+		LastLSN: uint64(lastLSN),
+	}, nil
+}
+
+// extractOrGenerateSlaveID gets slave ID from message or generates new one
+func (rm *ReplicationManager) extractOrGenerateSlaveID(lsnSync map[string]any, lastLSN uint64) string {
+	if id, ok := lsnSync["slave_id"].(string); ok && id != "" {
+		return id
+	}
+	// Generate new slave ID
+	return fmt.Sprintf("slave-%d-%d", time.Now().Unix(), lastLSN)
+}
+
+// registerSlave adds slave to master state
+func (rm *ReplicationManager) registerSlave(masterState *MasterState, slave *SlaveConnection) {
+	concurrency.WithLock(&masterState.mu, func() error {
+		masterState.slaves[slave.ID] = slave
+		return nil
+	})
+}
+
+// sendHandshakeResponse sends response to slave after successful handshake
+func (rm *ReplicationManager) sendHandshakeResponse(yield func([]byte, error) bool, slave *SlaveConnection, initialData []byte) bool {
+	var lsnSync map[string]any
+	json.Unmarshal(initialData, &lsnSync) // Already validated in parseSlaveHandshake
+
+	responseData := map[string]any{
+		"status": "OK",
+	}
+
+	// Include slave ID if we generated one
+	if _, hadID := lsnSync["slave_id"]; !hadID {
+		responseData["slave_id"] = slave.ID
+	}
+
+	responseBytes, err := json.Marshal(responseData)
+	if err != nil {
+		logging.Error("Failed to marshal response", zap.Error(ErrMarshalResponseFailed))
+		return yield([]byte("OK"), nil) // Fallback to simple response
+	}
+
+	return yield(responseBytes, nil)
+}
+
+func (rm *ReplicationManager) streamLogsToSlave(ctx context.Context, slave *SlaveConnection, yield func([]byte, error) bool) {
 	startLSN := slave.LastLSN
 
 	logging.Info("Starting log streaming for slave",
@@ -143,16 +209,17 @@ func (rm *ReplicationManager) streamLogsToSlave(ctx context.Context, slave *Slav
 
 	// Use the LogReader iterator to get logs starting from the slave's last LSN
 	logIterator := rm.logsReader.ReadLogsFromLSN(slaveCtx, startLSN)
+	logChan := rm.getLogsChan(slaveCtx, logIterator)
 
-	var logBatch []LogEvent
-	batchTimeout := time.NewTimer(20 * time.Millisecond) // Send batch after 20 ms even if not full
+	rm.runLogBatchingLoop(ctx, slave, logChan, yield)
+}
+
+// runLogBatchingLoop handles the main batching loop for streaming logs
+func (rm *ReplicationManager) runLogBatchingLoop(ctx context.Context, slave *SlaveConnection, logChan <-chan LogIteration, yield func([]byte, error) bool) {
+	batchTimeout := time.NewTimer(BatchTimeoutMs * time.Millisecond)
 	defer batchTimeout.Stop()
 
-	// Create a channel to receive logs from the iterator
-	// This channel will be closed when the iterator is exhausted
-	// This is for non-blocking reads from the iterator
-	// This is needed to catch ctx.Done() and exit the loop
-	logChan := rm.getLogsChan(slaveCtx, logIterator)
+	var logBatch []LogEvent
 
 	for {
 		select {
@@ -166,47 +233,40 @@ func (rm *ReplicationManager) streamLogsToSlave(ctx context.Context, slave *Slav
 				}
 				logBatch = logBatch[:0]
 			}
-			batchTimeout.Reset(20 * time.Millisecond)
+			batchTimeout.Reset(BatchTimeoutMs * time.Millisecond)
 
-		default:
-			select {
-			case logData := <-logChan:
-				if logData.err != nil {
-					logging.Error("Error reading log from iterator",
-						zap.String("slave_id", slave.ID),
-						zap.Error(logData.err))
-					yield(nil, logData.err)
-					return
-				}
+		case logData := <-logChan:
+			if logData.err != nil {
+				logging.Error("Error reading log from iterator",
+					zap.String("slave_id", slave.ID),
+					zap.Error(logData.err))
+				yield(nil, logData.err)
+				return
+			}
 
-				if logData.log != nil {
-					logEvent := LogEvent{
-						LSN:   logData.log.LSN,
-						CmdID: logData.log.Command,
-						Args:  logData.log.Arguments,
+			if logData.log != nil {
+				logBatch = rm.addLogToBatch(logBatch, logData.log)
+
+				if len(logBatch) >= MaxBatchSize {
+					if !rm.sendLogBatch(slave, logBatch, yield) {
+						return
 					}
-					logBatch = append(logBatch, logEvent)
-
-					if len(logBatch) >= 50 { // TODO: make batch size configured
-						if !rm.sendLogBatch(slave, logBatch, yield) {
-							return
-						}
-						logBatch = logBatch[:0]
-						batchTimeout.Reset(time.Second)
-					}
+					logBatch = logBatch[:0]
+					batchTimeout.Reset(BatchTimeoutMs * time.Millisecond)
 				}
-			case <-time.After(20 * time.Millisecond):
 			}
 		}
 	}
 }
 
-func (rm *ReplicationManager) NewSlaveWithLSN(lastLSN uint64) *SlaveConnection {
-	slave := &SlaveConnection{
-		ID:      fmt.Sprintf("slave-%d", time.Now().Unix()),
-		LastLSN: lastLSN,
+// addLogToBatch converts WAL log entry to LogEvent and adds to batch
+func (rm *ReplicationManager) addLogToBatch(logBatch []LogEvent, log *wal.LogEntry) []LogEvent {
+	logEvent := LogEvent{
+		LSN:   log.LSN,
+		CmdID: log.Command,
+		Args:  log.Arguments,
 	}
-	return slave
+	return append(logBatch, logEvent)
 }
 
 func (rm *ReplicationManager) removeSlave(masterState *MasterState, slaveID string) {
@@ -216,6 +276,41 @@ func (rm *ReplicationManager) removeSlave(masterState *MasterState, slaveID stri
 	})
 }
 
+// GetMinimumSlaveLSN returns the minimum LSN across all connected slaves.
+// This can be used by WAL to determine which logs can be safely compacted.
+// Returns MaxUint64 if no slaves are connected (meaning all logs can be compacted).
+func (rm *ReplicationManager) GetMinimumSlaveLSN() uint64 {
+	if !rm.IsMaster() {
+		return ^uint64(0) // MaxUint64 - non-masters can compact everything
+	}
+
+	// Access master state through a type assertion
+	// This is safe because we know rm is master at this point
+	if rm.masterState == nil {
+		return ^uint64(0) // MaxUint64 - all logs can be compacted
+	}
+
+	var minLSN uint64 = ^uint64(0) // Start with MaxUint64
+	hasSlaves := false
+
+	concurrency.WithLock(&rm.masterState.mu, func() error {
+		for _, slave := range rm.masterState.slaves {
+			hasSlaves = true
+			if slave.LastLSN < minLSN {
+				minLSN = slave.LastLSN
+			}
+		}
+		return nil
+	})
+
+	// If no slaves connected, return MaxUint64 to allow all logs to be compacted
+	if !hasSlaves {
+		return ^uint64(0) // MaxUint64
+	}
+
+	return minLSN
+}
+
 func (rm *ReplicationManager) getLogsChan(ctx context.Context, logIterator iter.Seq2[*wal.LogEntry, error]) <-chan LogIteration {
 	logChan := make(chan LogIteration, 100)
 	go func() {
@@ -223,7 +318,7 @@ func (rm *ReplicationManager) getLogsChan(ctx context.Context, logIterator iter.
 		for log, err := range logIterator {
 			select {
 			case logChan <- LogIteration{log: log, err: err}:
-				return
+				// Continue to next log entry
 			case <-ctx.Done():
 				return
 			}

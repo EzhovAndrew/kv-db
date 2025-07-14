@@ -3,6 +3,7 @@ package replication
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"time"
@@ -14,13 +15,38 @@ import (
 	"go.uber.org/zap"
 )
 
-func (rm *ReplicationManager) startSlave(ctx context.Context) {
+// Slave replication constants
+const (
+	SlaveReplicationMessageMultiplier = 100 * 2 // max message size * 100(batch size) * 2(for additional fields)
+	SyncTimeoutSeconds                = 10      // Timeout for LSN sync message
+	MaxRetries                        = 5       // Maximum connection retry attempts
+	BaseDelaySeconds                  = 1       // Base delay between retries in seconds
+)
 
+// Slave replication errors
+var (
+	ErrInvalidJSONFormat        = errors.New("invalid JSON format")
+	ErrInvalidBatchFormat       = errors.New("invalid batch format")
+	ErrStorageApplicationFailed = errors.New("storage application failed")
+	ErrMarshalLSNSyncFailed     = errors.New("failed to marshal LSN sync message")
+	ErrSendLSNSyncFailed        = errors.New("failed to send LSN sync message")
+	ErrMasterRejectedLSNSync    = errors.New("master rejected LSN sync")
+	ErrFailedToSyncLSN          = errors.New("failed to sync LSN with master")
+	ErrConnectToMasterFailed    = errors.New("failed to connect to master")
+	ErrInvalidTotalCount        = errors.New("invalid total count")
+	ErrEmptyEventsList          = errors.New("empty events list")
+	ErrEventCountExceedsTotal   = errors.New("events count exceeds total")
+	ErrInvalidLSNInEvent        = errors.New("invalid LSN in event")
+	ErrEmptyArgsInEvent         = errors.New("empty args in event")
+	ErrInvalidCommandID         = errors.New("invalid command ID in event")
+)
+
+func (rm *ReplicationManager) startSlave(ctx context.Context) {
 	// Create network configuration for master connection
 	masterCfg := &configuration.NetworkConfig{
 		Ip:                      rm.cfg.Replication.MasterAddress,
 		Port:                    rm.cfg.Replication.MasterPort,
-		MaxMessageSize:          rm.cfg.Network.MaxMessageSize * 100 * 2, // max message size * 100(batch size) * 2(for additional fields)
+		MaxMessageSize:          rm.cfg.Network.MaxMessageSize * SlaveReplicationMessageMultiplier,
 		IdleTimeout:             rm.cfg.Network.IdleTimeout,
 		MaxConnections:          1, // Not used for client
 		GracefulShutdownTimeout: rm.cfg.Network.GracefulShutdownTimeout,
@@ -62,37 +88,19 @@ func (rm *ReplicationManager) startSlave(ctx context.Context) {
 
 // connectToMaster establishes connection to master with retries
 func (rm *ReplicationManager) connectToMaster(ctx context.Context, client *network.TCPClient) error {
-	maxRetries := 5
-	baseDelay := 1 * time.Second
-
-	for attempt := 1; attempt <= maxRetries; attempt++ {
+	for attempt := 1; attempt <= MaxRetries; attempt++ {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
 		}
 
-		err := client.Connect(ctx)
-		if err == nil {
-			logging.Info("Successfully connected to master",
-				zap.String("master_address", net.JoinHostPort(rm.cfg.Replication.MasterAddress, rm.cfg.Replication.MasterPort)),
-				zap.Int("attempt", attempt))
-
-			if err := rm.sendLastLSNToMaster(ctx, client); err != nil {
-				logging.Error("Failed to send last LSN to master", zap.Error(err))
-				client.Close() // nolint: errcheck
-				return fmt.Errorf("failed to sync LSN with master: %w", err)
-			}
+		if err := rm.attemptConnection(ctx, client, attempt); err == nil {
 			return nil
 		}
 
-		logging.Warn("Failed to connect to master, retrying",
-			zap.Error(err),
-			zap.Int("attempt", attempt),
-			zap.Int("max_retries", maxRetries))
-
-		if attempt < maxRetries {
-			delay := time.Duration(attempt) * baseDelay
+		if attempt < MaxRetries {
+			delay := time.Duration(attempt) * BaseDelaySeconds * time.Second
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -102,7 +110,31 @@ func (rm *ReplicationManager) connectToMaster(ctx context.Context, client *netwo
 		}
 	}
 
-	return fmt.Errorf("failed to connect to master after %d attempts", maxRetries)
+	return fmt.Errorf("%w after %d attempts", ErrConnectToMasterFailed, MaxRetries)
+}
+
+// attemptConnection tries to connect to master and sync LSN
+func (rm *ReplicationManager) attemptConnection(ctx context.Context, client *network.TCPClient, attempt int) error {
+	err := client.Connect(ctx)
+	if err != nil {
+		logging.Warn("Failed to connect to master, retrying",
+			zap.Error(err),
+			zap.Int("attempt", attempt),
+			zap.Int("max_retries", MaxRetries))
+		return err
+	}
+
+	logging.Info("Successfully connected to master",
+		zap.String("master_address", net.JoinHostPort(rm.cfg.Replication.MasterAddress, rm.cfg.Replication.MasterPort)),
+		zap.Int("attempt", attempt))
+
+	if err := rm.sendLastLSNToMaster(ctx, client); err != nil {
+		logging.Error("Failed to send last LSN to master", zap.Error(err))
+		client.Close() // nolint: errcheck
+		return fmt.Errorf("%w: %v", ErrFailedToSyncLSN, err)
+	}
+
+	return nil
 }
 
 // handleMasterMessage processes incoming log messages from master
@@ -113,7 +145,7 @@ func (rm *ReplicationManager) handleMasterMessage(ctx context.Context, message [
 		logging.Error("Failed to parse log batch from master",
 			zap.Error(err),
 			zap.String("raw_message", string(message)))
-		return []byte("ERROR: Invalid JSON format")
+		return rm.createErrorResponse(ErrInvalidJSONFormat.Error())
 	}
 
 	// Validate batch
@@ -122,7 +154,7 @@ func (rm *ReplicationManager) handleMasterMessage(ctx context.Context, message [
 			zap.Error(err),
 			zap.Int("total", batch.Total),
 			zap.Int("events_count", len(batch.Events)))
-		return []byte("ERROR: Invalid batch format")
+		return rm.createErrorResponse(ErrInvalidBatchFormat.Error())
 	}
 
 	walLogs := rm.convertToWALLogs(batch.Events)
@@ -131,7 +163,7 @@ func (rm *ReplicationManager) handleMasterMessage(ctx context.Context, message [
 		logging.Error("Failed to apply logs to storage",
 			zap.Error(err),
 			zap.Int("log_count", len(walLogs)))
-		return []byte("ERROR: Storage application failed")
+		return rm.createErrorResponse(ErrStorageApplicationFailed.Error())
 	}
 
 	logging.Info("Successfully applied log batch",
@@ -141,33 +173,38 @@ func (rm *ReplicationManager) handleMasterMessage(ctx context.Context, message [
 	return []byte("OK")
 }
 
+// createErrorResponse creates a standardized error response
+func (rm *ReplicationManager) createErrorResponse(errorMsg string) []byte {
+	return []byte("ERROR: " + errorMsg)
+}
+
 // validateLogBatch validates the received log batch
 func (rm *ReplicationManager) validateLogBatch(batch *LogBatch) error {
 	if batch.Total <= 0 {
-		return fmt.Errorf("invalid total count: %d", batch.Total)
+		return ErrInvalidTotalCount
 	}
 
 	if len(batch.Events) == 0 {
-		return fmt.Errorf("empty events list")
+		return ErrEmptyEventsList
 	}
 
 	if len(batch.Events) > batch.Total {
-		return fmt.Errorf("events count %d exceeds total %d", len(batch.Events), batch.Total)
+		return ErrEventCountExceedsTotal
 	}
 
 	// Validate each event
 	for i, event := range batch.Events {
 		if event.LSN == 0 {
-			return fmt.Errorf("invalid LSN in event %d: %d", i, event.LSN)
+			return fmt.Errorf("%w %d: %d", ErrInvalidLSNInEvent, i, event.LSN)
 		}
 
 		if len(event.Args) == 0 {
-			return fmt.Errorf("empty args in event %d", i)
+			return fmt.Errorf("%w %d", ErrEmptyArgsInEvent, i)
 		}
 
 		// Validate command ID (assuming valid range)
 		if event.CmdID < 0 {
-			return fmt.Errorf("invalid command ID in event %d: %d", i, event.CmdID)
+			return fmt.Errorf("%w %d: %d", ErrInvalidCommandID, i, event.CmdID)
 		}
 	}
 
@@ -212,31 +249,79 @@ func (rm *ReplicationManager) sendLastLSNToMaster(ctx context.Context, client *n
 		lastLSN = rm.storageApplier.GetLastLSN()
 	}
 
+	messageBytes, err := rm.createLSNSyncMessage(lastLSN)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrMarshalLSNSyncFailed, err)
+	}
+
+	logging.Info("Sending last LSN to master",
+		zap.Uint64("last_lsn", lastLSN),
+		zap.String("slave_id", rm.cfg.Replication.SlaveID))
+
+	response, err := client.SendMessageWithTimeout(ctx, messageBytes, SyncTimeoutSeconds*time.Second)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrSendLSNSyncFailed, err)
+	}
+
+	if err := rm.handleMasterResponse(response); err != nil {
+		return err
+	}
+
+	logging.Info("Successfully synchronized LSN with master",
+		zap.Uint64("last_lsn", lastLSN),
+		zap.String("slave_id", rm.cfg.Replication.SlaveID))
+
+	return nil
+}
+
+// createLSNSyncMessage creates the LSN sync message to send to master
+func (rm *ReplicationManager) createLSNSyncMessage(lastLSN uint64) ([]byte, error) {
 	lsnMessage := map[string]any{
 		"type":     "lsn_sync",
 		"last_lsn": lastLSN,
 	}
 
-	messageBytes, err := json.Marshal(lsnMessage)
-	if err != nil {
-		return fmt.Errorf("failed to marshal LSN sync message: %w", err)
+	// Include slave ID if configured
+	if rm.cfg.Replication.SlaveID != "" {
+		lsnMessage["slave_id"] = rm.cfg.Replication.SlaveID
 	}
 
-	logging.Info("Sending last LSN to master",
-		zap.Uint64("last_lsn", lastLSN))
+	return json.Marshal(lsnMessage)
+}
 
-	response, err := client.SendMessageWithTimeout(ctx, messageBytes, 10*time.Second)
-	if err != nil {
-		return fmt.Errorf("failed to send LSN sync message: %w", err)
+// handleMasterResponse processes the response from master after LSN sync
+func (rm *ReplicationManager) handleMasterResponse(response []byte) error {
+	// Check if response is JSON (containing assigned slave ID)
+	var responseData map[string]any
+	if err := json.Unmarshal(response, &responseData); err == nil {
+		return rm.processJSONResponse(responseData)
 	}
 
-	responseStr := string(response)
+	// Simple string response (backward compatibility)
+	return rm.processStringResponse(string(response))
+}
+
+// processJSONResponse handles JSON response from master
+func (rm *ReplicationManager) processJSONResponse(responseData map[string]any) error {
+	// Master sent JSON response with slave ID
+	if assignedID, ok := responseData["slave_id"].(string); ok && rm.cfg.Replication.SlaveID == "" {
+		rm.cfg.Replication.SlaveID = assignedID
+		logging.Info("Master assigned slave ID",
+			zap.String("slave_id", assignedID))
+		// TODO: In production, persist this ID to config file
+	}
+
+	if status, ok := responseData["status"].(string); ok && status != "OK" {
+		return fmt.Errorf("%w: %s", ErrMasterRejectedLSNSync, status)
+	}
+
+	return nil
+}
+
+// processStringResponse handles simple string response from master (backward compatibility)
+func (rm *ReplicationManager) processStringResponse(responseStr string) error {
 	if responseStr != "OK" {
-		return fmt.Errorf("master rejected LSN sync: %s", responseStr)
+		return fmt.Errorf("%w: %s", ErrMasterRejectedLSNSync, responseStr)
 	}
-
-	logging.Info("Successfully synchronized LSN with master",
-		zap.Uint64("last_lsn", lastLSN))
-
 	return nil
 }

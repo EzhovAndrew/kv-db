@@ -29,6 +29,9 @@ type ReplicationManager interface {
 	SetStorageApplier(replication.StorageApplier)
 	SetLogsReader(replication.LogsReader)
 	IsSlave() bool
+	// GetMinimumSlaveLSN returns minimum LSN across slaves.
+	// Returns MaxUint64 when no slaves connected (all logs can be compacted).
+	GetMinimumSlaveLSN() uint64
 }
 
 type Initializer struct {
