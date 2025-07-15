@@ -104,7 +104,11 @@ func (rm *ReplicationManager) startMaster(ctx context.Context) {
 	logging.Info("Master replication server stopped")
 }
 
-func (rm *ReplicationManager) handleSlaveConnection(ctx context.Context, initialData []byte, masterState *MasterState) iter.Seq2[[]byte, error] {
+func (rm *ReplicationManager) handleSlaveConnection(
+	ctx context.Context,
+	initialData []byte,
+	masterState *MasterState,
+) iter.Seq2[[]byte, error] {
 	return func(yield func([]byte, error) bool) {
 		slave, err := rm.parseSlaveHandshake(initialData)
 		if err != nil {
@@ -119,7 +123,7 @@ func (rm *ReplicationManager) handleSlaveConnection(ctx context.Context, initial
 			zap.String("slave_id", slave.ID),
 			zap.Uint64("last_lsn", slave.LastLSN))
 
-		if !rm.sendHandshakeResponse(yield, slave, initialData) {
+		if !rm.sendHandshakeResponse(yield, slave) {
 			rm.removeSlave(masterState, slave.ID)
 			return
 		}
@@ -174,17 +178,13 @@ func (rm *ReplicationManager) registerSlave(masterState *MasterState, slave *Sla
 }
 
 // sendHandshakeResponse sends response to slave after successful handshake
-func (rm *ReplicationManager) sendHandshakeResponse(yield func([]byte, error) bool, slave *SlaveConnection, initialData []byte) bool {
-	var lsnSync map[string]any
-	json.Unmarshal(initialData, &lsnSync) // Already validated in parseSlaveHandshake
-
+func (rm *ReplicationManager) sendHandshakeResponse(
+	yield func([]byte, error) bool,
+	slave *SlaveConnection,
+) bool {
 	responseData := map[string]any{
-		"status": "OK",
-	}
-
-	// Include slave ID if we generated one
-	if _, hadID := lsnSync["slave_id"]; !hadID {
-		responseData["slave_id"] = slave.ID
+		"status":   "OK",
+		"slave_id": slave.ID,
 	}
 
 	responseBytes, err := json.Marshal(responseData)
@@ -196,7 +196,11 @@ func (rm *ReplicationManager) sendHandshakeResponse(yield func([]byte, error) bo
 	return yield(responseBytes, nil)
 }
 
-func (rm *ReplicationManager) streamLogsToSlave(ctx context.Context, slave *SlaveConnection, yield func([]byte, error) bool) {
+func (rm *ReplicationManager) streamLogsToSlave(
+	ctx context.Context,
+	slave *SlaveConnection,
+	yield func([]byte, error) bool,
+) {
 	startLSN := slave.LastLSN
 
 	logging.Info("Starting log streaming for slave",
@@ -215,7 +219,12 @@ func (rm *ReplicationManager) streamLogsToSlave(ctx context.Context, slave *Slav
 }
 
 // runLogBatchingLoop handles the main batching loop for streaming logs
-func (rm *ReplicationManager) runLogBatchingLoop(ctx context.Context, slave *SlaveConnection, logChan <-chan LogIteration, yield func([]byte, error) bool) {
+func (rm *ReplicationManager) runLogBatchingLoop(
+	ctx context.Context,
+	slave *SlaveConnection,
+	logChan <-chan LogIteration,
+	yield func([]byte, error) bool,
+) {
 	batchTimeout := time.NewTimer(BatchTimeoutMs * time.Millisecond)
 	defer batchTimeout.Stop()
 
@@ -290,7 +299,7 @@ func (rm *ReplicationManager) GetMinimumSlaveLSN() uint64 {
 		return ^uint64(0) // MaxUint64 - all logs can be compacted
 	}
 
-	var minLSN uint64 = ^uint64(0) // Start with MaxUint64
+	var minLSN = ^uint64(0) // Start with MaxUint64
 	hasSlaves := false
 
 	concurrency.WithLock(&rm.masterState.mu, func() error {
@@ -311,7 +320,10 @@ func (rm *ReplicationManager) GetMinimumSlaveLSN() uint64 {
 	return minLSN
 }
 
-func (rm *ReplicationManager) getLogsChan(ctx context.Context, logIterator iter.Seq2[*wal.LogEntry, error]) <-chan LogIteration {
+func (rm *ReplicationManager) getLogsChan(
+	ctx context.Context,
+	logIterator iter.Seq2[*wal.LogEntry, error],
+) <-chan LogIteration {
 	logChan := make(chan LogIteration, 100)
 	go func() {
 		defer close(logChan)
@@ -327,7 +339,11 @@ func (rm *ReplicationManager) getLogsChan(ctx context.Context, logIterator iter.
 	return logChan
 }
 
-func (rm *ReplicationManager) sendLogBatch(slave *SlaveConnection, logBatch []LogEvent, yield func([]byte, error) bool) bool {
+func (rm *ReplicationManager) sendLogBatch(
+	slave *SlaveConnection,
+	logBatch []LogEvent,
+	yield func([]byte, error) bool,
+) bool {
 	if len(logBatch) == 0 {
 		return true
 	}

@@ -61,9 +61,6 @@ func (rm *ReplicationManager) startSlave(ctx context.Context) {
 		return
 	}
 
-	// Start health monitoring
-	client.StartHealthMonitoring(ctx)
-
 	// Start push mode to receive logs from master
 	if err := client.StartPushMode(ctx, rm.handleMasterMessage); err != nil {
 		logging.Error("Failed to start push mode", zap.Error(err))
@@ -77,7 +74,6 @@ func (rm *ReplicationManager) startSlave(ctx context.Context) {
 
 	// Cleanup
 	client.StopPushMode()
-	client.StopHealthMonitoring()
 	if err := client.Close(); err != nil {
 		logging.Warn("Error closing master connection", zap.Error(err))
 	}

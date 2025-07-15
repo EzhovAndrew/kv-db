@@ -86,11 +86,21 @@ func (l *FileLogsReader) processData(data []byte, yield func(*LogEntry, error) b
 	return l.processDataWithOptions(data, yield, nil, 0)
 }
 
-func (l *FileLogsReader) processDataFromLSN(data []byte, lsn uint64, ctx context.Context, yield func(*LogEntry, error) bool) error {
+func (l *FileLogsReader) processDataFromLSN(
+	data []byte,
+	lsn uint64,
+	ctx context.Context,
+	yield func(*LogEntry, error) bool,
+) error {
 	return l.processDataWithOptions(data, yield, ctx, lsn)
 }
 
-func (l *FileLogsReader) processDataWithOptions(data []byte, yield func(*LogEntry, error) bool, ctx context.Context, minLSN uint64) error {
+func (l *FileLogsReader) processDataWithOptions(
+	data []byte,
+	yield func(*LogEntry, error) bool,
+	ctx context.Context,
+	minLSN uint64,
+) error {
 	buf := bytes.NewReader(data)
 
 	for buf.Len() > 0 {

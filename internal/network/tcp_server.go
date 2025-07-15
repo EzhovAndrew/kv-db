@@ -65,44 +65,111 @@ func (s *TCPServer) handleConnections(ctx context.Context, connectionHandler fun
 
 	go func() {
 		defer wg.Done()
-		for {
-			conn, err := s.listener.Accept()
-			if err != nil {
-				if errors.Is(err, net.ErrClosed) {
-					return
-				}
-				logging.Error("unable to accept connection", zap.Error(err))
-				continue
-			}
-
-			if !s.semaphore.TryAcquire() {
-				_, err := conn.Write([]byte("ERROR: Connection limit exceeded, try again later"))
-				if err != nil {
-					logging.Error("unable to send message about connection limit exceeded", zap.Error(err))
-				}
-				err = conn.Close()
-				if err != nil {
-					logging.Error("error in conn.Close()", zap.Error(err))
-				}
-				continue
-			}
-
-			s.connectionsWg.Add(1)
-			go func(conn net.Conn) {
-				defer s.semaphore.Release()
-				defer s.connectionsWg.Done()
-				connectionHandler(ctx, conn)
-			}(conn)
-		}
+		s.acceptConnections(ctx, connectionHandler)
 	}()
 
+	s.waitForShutdown(ctx)
+	wg.Wait()
+	s.gracefulShutdown()
+}
+
+func (s *TCPServer) handleConnection(ctx context.Context, conn net.Conn, handler TCPHandler) {
+	defer s.recoverAndCloseConnection(conn, "connection")
+
+	buffer := s.bufferPool.Get().(*[]byte)
+	defer s.bufferPool.Put(buffer)
+
+	for {
+		if s.shouldStopConnection(ctx) {
+			return
+		}
+
+		data, err := s.readMessage(conn, buffer)
+		if err != nil {
+			if s.isConnectionClosed(err) {
+				return
+			}
+			logging.Warn("unable to read from connection", zap.Error(err))
+			return
+		}
+
+		if !s.validateMessageSize(len(data), conn.RemoteAddr().String()) {
+			return
+		}
+
+		response := handler(ctx, data)
+		if err := s.writeWithDeadline(conn, response); err != nil {
+			logging.Warn("unable to write response to connection",
+				zap.String("address", conn.RemoteAddr().String()),
+				zap.Error(err))
+			return
+		}
+	}
+}
+
+func (s *TCPServer) handleStreamConnection(ctx context.Context, conn net.Conn, handler StreamHandler) {
+	defer s.recoverAndCloseConnection(conn, "stream connection")
+
+	buffer := s.bufferPool.Get().(*[]byte)
+	defer s.bufferPool.Put(buffer)
+
+	initialData, err := s.readInitialData(conn, buffer)
+	if err != nil {
+		return
+	}
+
+	if !s.validateMessageSize(len(initialData), conn.RemoteAddr().String()) {
+		return
+	}
+
+	s.processDataStream(ctx, conn, handler, initialData)
+}
+
+func (s *TCPServer) acceptConnections(ctx context.Context, connectionHandler func(context.Context, net.Conn)) {
+	for {
+		conn, err := s.listener.Accept()
+		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
+			logging.Error("unable to accept connection", zap.Error(err))
+			continue
+		}
+
+		if !s.semaphore.TryAcquire() {
+			s.rejectConnection(conn)
+			continue
+		}
+
+		s.connectionsWg.Add(1)
+		go func(conn net.Conn) {
+			defer s.semaphore.Release()
+			defer s.connectionsWg.Done()
+			connectionHandler(ctx, conn)
+		}(conn)
+	}
+}
+
+func (s *TCPServer) rejectConnection(conn net.Conn) {
+	_, err := conn.Write([]byte("ERROR: Connection limit exceeded, try again later"))
+	if err != nil {
+		logging.Error("unable to send message about connection limit exceeded", zap.Error(err))
+	}
+	err = conn.Close()
+	if err != nil {
+		logging.Error("error in conn.Close()", zap.Error(err))
+	}
+}
+
+func (s *TCPServer) waitForShutdown(ctx context.Context) {
 	<-ctx.Done()
 	err := s.listener.Close()
 	if err != nil {
 		logging.Warn("error in listener.Close()", zap.Error(err))
 	}
-	wg.Wait()
+}
 
+func (s *TCPServer) gracefulShutdown() {
 	done := make(chan struct{})
 	go func() {
 		s.connectionsWg.Wait()
@@ -117,113 +184,88 @@ func (s *TCPServer) handleConnections(ctx context.Context, connectionHandler fun
 	}
 }
 
-func (s *TCPServer) handleConnection(ctx context.Context, conn net.Conn, handler TCPHandler) {
-	defer func() {
-		if v := recover(); v != nil {
-			logging.Error("captured panic", zap.Any("panic", v))
-		}
+func (s *TCPServer) recoverAndCloseConnection(conn net.Conn, connectionType string) {
+	if v := recover(); v != nil {
+		logging.Error("captured panic in "+connectionType, zap.Any("panic", v))
+	}
 
-		if err := conn.Close(); err != nil {
-			logging.Error("failed to close connection", zap.Error(err))
-		}
-	}()
-
-	buffer := s.bufferPool.Get().(*[]byte)
-	defer s.bufferPool.Put(buffer)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-			err := conn.SetReadDeadline(time.Now().Add(time.Second * time.Duration(s.cfg.IdleTimeout)))
-			if err != nil {
-				logging.Warn("unable to set read deadline", zap.Error(err))
-				return
-			}
-		}
-		count, err := conn.Read(*buffer)
-		if err != nil {
-			if errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF) {
-				return
-			}
-			logging.Warn("unable to read from connection", zap.Error(err))
-			return
-		}
-		if count == s.cfg.MaxMessageSize+1 {
-			logging.Warn("message size exceeds limit")
-			return
-		}
-
-		response := handler(ctx, (*buffer)[:count])
-		if err := s.writeWithDeadline(conn, response); err != nil {
-			logging.Warn("unable to write response to connection",
-				zap.String("address", conn.RemoteAddr().String()),
-				zap.Error(err))
-			return
-		}
+	if err := conn.Close(); err != nil {
+		logging.Error("failed to close "+connectionType, zap.Error(err))
 	}
 }
 
-func (s *TCPServer) handleStreamConnection(ctx context.Context, conn net.Conn, handler StreamHandler) {
-	defer func() {
-		if v := recover(); v != nil {
-			logging.Error("captured panic in stream connection", zap.Any("panic", v))
-		}
+func (s *TCPServer) shouldStopConnection(ctx context.Context) bool {
+	select {
+	case <-ctx.Done():
+		return true
+	default:
+		return false
+	}
+}
 
-		if err := conn.Close(); err != nil {
-			logging.Error("failed to close stream connection", zap.Error(err))
-		}
-	}()
-
-	buffer := s.bufferPool.Get().(*[]byte)
-	defer s.bufferPool.Put(buffer)
-
+func (s *TCPServer) readMessage(conn net.Conn, buffer *[]byte) ([]byte, error) {
 	err := conn.SetReadDeadline(time.Now().Add(time.Second * time.Duration(s.cfg.IdleTimeout)))
 	if err != nil {
-		logging.Warn("unable to set read deadline for initial data", zap.Error(err))
-		return
+		logging.Warn("unable to set read deadline", zap.Error(err))
+		return nil, err
 	}
 
 	count, err := conn.Read(*buffer)
 	if err != nil {
-		if errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF) {
-			return
-		}
-		logging.Warn("unable to read initial data from stream connection", zap.Error(err))
-		return
+		return nil, err
 	}
 
-	if count == s.cfg.MaxMessageSize+1 {
-		logging.Warn("initial message size exceeds limit")
-		return
+	return (*buffer)[:count], nil
+}
+
+func (s *TCPServer) readInitialData(conn net.Conn, buffer *[]byte) ([]byte, error) {
+	err := conn.SetReadDeadline(time.Now().Add(time.Second * time.Duration(s.cfg.IdleTimeout)))
+	if err != nil {
+		logging.Warn("unable to set read deadline for initial data", zap.Error(err))
+		return nil, err
+	}
+
+	count, err := conn.Read(*buffer)
+	if err != nil {
+		if s.isConnectionClosed(err) {
+			return nil, err
+		}
+		logging.Warn("unable to read initial data from stream connection", zap.Error(err))
+		return nil, err
 	}
 
 	initialData := make([]byte, count)
 	copy(initialData, (*buffer)[:count])
+	return initialData, nil
+}
 
+func (s *TCPServer) isConnectionClosed(err error) bool {
+	return errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF)
+}
+
+func (s *TCPServer) validateMessageSize(messageSize int, remoteAddr string) bool {
+	if messageSize > s.cfg.MaxMessageSize {
+		logging.Warn("message size exceeds limit",
+			zap.Int("message_size", messageSize),
+			zap.Int("max_size", s.cfg.MaxMessageSize),
+			zap.String("remote_addr", remoteAddr))
+		return false
+	}
+	return true
+}
+
+func (s *TCPServer) processDataStream(ctx context.Context, conn net.Conn, handler StreamHandler, initialData []byte) {
 	dataIterator := handler(ctx, initialData)
 
-	// Send initial response (could be acknowledgment or initial data)
-	// and then stream data chunks using the iterator
 	for data, iterErr := range dataIterator {
-		select {
-		case <-ctx.Done():
+		if s.shouldStopConnection(ctx) {
 			logging.Info("stream connection context cancelled",
 				zap.String("address", conn.RemoteAddr().String()))
 			return
-		default:
 		}
 
 		if iterErr != nil {
-			logging.Error("error from stream iterator",
-				zap.Error(iterErr),
-				zap.String("address", conn.RemoteAddr().String()))
-
-			errorMsg := fmt.Sprintf("ERROR: %s", iterErr.Error())
-			if err := s.writeWithDeadline(conn, []byte(errorMsg)); err != nil {
-				logging.Warn("unable to send error message to client", zap.Error(err))
-			}
+			s.handleStreamError(conn, iterErr)
 			return
 		}
 
@@ -245,6 +287,17 @@ func (s *TCPServer) handleStreamConnection(ctx context.Context, conn net.Conn, h
 
 	logging.Info("stream connection completed",
 		zap.String("address", conn.RemoteAddr().String()))
+}
+
+func (s *TCPServer) handleStreamError(conn net.Conn, iterErr error) {
+	logging.Error("error from stream iterator",
+		zap.Error(iterErr),
+		zap.String("address", conn.RemoteAddr().String()))
+
+	errorMsg := fmt.Sprintf("ERROR: %s", iterErr.Error())
+	if err := s.writeWithDeadline(conn, []byte(errorMsg)); err != nil {
+		logging.Warn("unable to send error message to client", zap.Error(err))
+	}
 }
 
 func (s *TCPServer) writeWithDeadline(conn net.Conn, data []byte) error {

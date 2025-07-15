@@ -129,7 +129,12 @@ func (w *WAL) handleShutdown() {
 }
 
 // handleNewLogMessage processes a new log message
-func (w *WAL) handleNewLogMessage(logMessage LogMessage, config *configuration.WALConfig, timer *time.Timer, flushTimeout time.Duration) {
+func (w *WAL) handleNewLogMessage(
+	logMessage LogMessage,
+	config *configuration.WALConfig,
+	timer *time.Timer,
+	flushTimeout time.Duration,
+) {
 	// Reset timer if this is the first log in the batch
 	if len(w.batch) == 0 {
 		timer.Reset(flushTimeout)

@@ -114,11 +114,52 @@ func TestTCPServer_BufferPool(t *testing.T) {
 	server.bufferPool.Put(buffer2)
 }
 
-func TestTCPServer_HandleRequests_ContextCancellation(t *testing.T) {
-	logging.Init(&configuration.LoggingConfig{})
+func TestTCPServer_HandleRequests_RequestResponse(t *testing.T) {
 	cfg := &configuration.NetworkConfig{
 		Ip:                      "127.0.0.1",
-		Port:                    "3223",
+		Port:                    "0",
+		MaxConnections:          5,
+		MaxMessageSize:          1024,
+		IdleTimeout:             5,
+		GracefulShutdownTimeout: 1,
+	}
+
+	server, err := NewTCPServer(cfg)
+	require.NoError(t, err)
+	require.NotNil(t, server)
+
+	ctx := t.Context()
+
+	handler := func(ctx context.Context, data []byte) []byte {
+		return []byte("response")
+	}
+
+	go server.HandleRequests(ctx, handler)
+
+	// Give server time to start
+	time.Sleep(50 * time.Millisecond)
+
+	addr := server.listener.Addr().String()
+	conn, err := net.Dial("tcp", addr)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	// Send message
+	_, err = conn.Write([]byte("test message"))
+	require.NoError(t, err)
+
+	// Read response
+	buffer := make([]byte, 1024)
+	conn.SetReadDeadline(time.Now().Add(time.Second))
+	n, err := conn.Read(buffer)
+	require.NoError(t, err)
+	assert.Equal(t, "response", string(buffer[:n]))
+}
+
+func TestTCPServer_HandleRequests_ContextCancellation(t *testing.T) {
+	cfg := &configuration.NetworkConfig{
+		Ip:                      "127.0.0.1",
+		Port:                    "0",
 		MaxConnections:          5,
 		MaxMessageSize:          1024,
 		IdleTimeout:             1,
@@ -215,7 +256,7 @@ func TestTCPServer_ConnectionLimit(t *testing.T) {
 func TestTCPServer_MessageSizeLimit(t *testing.T) {
 	cfg := &configuration.NetworkConfig{
 		Ip:                      "127.0.0.1",
-		Port:                    "3223",
+		Port:                    "0",
 		MaxConnections:          5,
 		MaxMessageSize:          10, // Small limit for testing
 		IdleTimeout:             5,
@@ -337,6 +378,7 @@ func TestTCPServer_ConcurrentConnections(t *testing.T) {
 
 	wg.Wait()
 }
+
 func TestTCPServer_GracefulShutdown(t *testing.T) {
 	cfg := &configuration.NetworkConfig{
 		Ip:                      "127.0.0.1",
