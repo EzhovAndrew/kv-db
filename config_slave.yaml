@@ -2,7 +2,7 @@ engine:
   type: "in_memory"
 network:
   ip: "127.0.0.1"
-  port: 3223
+  port: 3224
   max_connections: 100
   max_message_size: 4096
   idle_timeout: 300
@@ -14,8 +14,9 @@ wal:
   flush_batch_size: 100
   flush_batch_timeout: 10
   max_segment_size: 10485760
-  data_directory: "/tmp/kv_db/wal"
+  data_directory: "/tmp/kv_db/wal_slave"
 replication:
-  role: "master"
+  role: "slave"
   master_address: "127.0.0.1"
   master_port: 3333
+  slave_id: "slave1"

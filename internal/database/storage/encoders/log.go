@@ -1,4 +1,4 @@
-package wal
+package encoders
 
 type Log struct {
 	LSN       uint64

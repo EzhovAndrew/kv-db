@@ -126,7 +126,6 @@ func main() {
 		fmt.Printf("Error connecting to server: %v\n", err)
 		return
 	}
-	// Setup readline with autocomplete
 	completer := readline.NewPrefixCompleter(createCompleterItems()...)
 
 	rl, err := readline.NewEx(&readline.Config{
@@ -185,7 +184,6 @@ func getClient() (*Client, error) {
 func createCompleterItems() []readline.PrefixCompleterInterface {
 	var items []readline.PrefixCompleterInterface
 
-	// Sort commands for consistent ordering
 	var cmdNames []string
 	for name := range commands {
 		cmdNames = append(cmdNames, name)
@@ -233,7 +231,6 @@ func handleHelp(args []string) {
 		fmt.Println("Available commands:")
 		fmt.Println()
 
-		// Sort commands for consistent display
 		var cmdNames []string
 		for name := range commands {
 			cmdNames = append(cmdNames, name)
@@ -250,7 +247,6 @@ func handleHelp(args []string) {
 		return
 	}
 
-	// Show specific command help
 	cmdName := strings.ToUpper(args[0])
 	if cmd, exists := commands[cmdName]; exists {
 		fmt.Printf("Command: %s\n", cmd.Name)

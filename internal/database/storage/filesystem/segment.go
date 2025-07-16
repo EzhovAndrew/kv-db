@@ -3,11 +3,12 @@ package filesystem
 import (
 	"fmt"
 	"os"
+	"sync/atomic"
 )
 
 type Segment struct {
 	FileName    string
-	currentSize int
+	currentSize atomic.Int64
 	fd          *os.File
 }
 
@@ -23,7 +24,7 @@ func (s *Segment) open() error {
 		return fmt.Errorf("failed to open file %s: %w", s.FileName, err)
 	}
 	s.fd = fd
-	s.currentSize = 0
+	s.currentSize.Store(0)
 	return nil
 }
 
@@ -36,12 +37,17 @@ func (s *Segment) openForAppend() error {
 	return nil
 }
 
-func (s *Segment) setCurrentSize(size int) {
-	s.currentSize = size
+func (s *Segment) setCurrentSize(size int64) {
+	s.currentSize.Store(size)
+}
+
+func (s *Segment) getCurrentSize() int64 {
+	return s.currentSize.Load()
 }
 
 func (s *Segment) checkOverflow(maxSize, dataSize int) bool {
-	return s.currentSize+dataSize >= maxSize
+	currentSize := s.currentSize.Load()
+	return currentSize+int64(dataSize) >= int64(maxSize)
 }
 
 func (s *Segment) writeSync(data []byte) error {
@@ -58,7 +64,7 @@ func (s *Segment) writeSync(data []byte) error {
 		return fmt.Errorf("failed to sync data: %w", err)
 	}
 
-	s.currentSize += n
+	s.currentSize.Add(int64(n))
 	return nil
 }
 

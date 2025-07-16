@@ -2,6 +2,7 @@ package wal
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"iter"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/EzhovAndrew/kv-db/internal/configuration"
 	"github.com/EzhovAndrew/kv-db/internal/database/compute"
+	"github.com/EzhovAndrew/kv-db/internal/database/storage/encoders"
 	"github.com/EzhovAndrew/kv-db/internal/logging"
 	"github.com/EzhovAndrew/kv-db/internal/utils"
 	"github.com/stretchr/testify/assert"
@@ -28,36 +30,15 @@ func TestMain(m *testing.M) {
 }
 
 func TestNewFileLogsReader(t *testing.T) {
-	tests := []struct {
-		name           string
-		dataDir        string
-		maxSegmentSize int
-	}{
-		{
-			name:           "valid configuration",
-			dataDir:        "/tmp/wal",
-			maxSegmentSize: 1024,
-		},
-		{
-			name:           "small segment size",
-			dataDir:        "./data",
-			maxSegmentSize: 4096,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			reader := NewFileLogsReader(tt.dataDir, tt.maxSegmentSize)
-			defer os.RemoveAll(tt.dataDir)
-			assert.NotNil(t, reader)
-			assert.NotNil(t, reader.filesystem)
-		})
-	}
+	mockFS := &mockFileSystemReader{}
+	reader := NewFileLogsReader(mockFS)
+	assert.NotNil(t, reader)
+	assert.NotNil(t, reader.filesystem)
 }
 
 func TestFileLogsReader_Read_ValidLogs(t *testing.T) {
 	// Create valid log data
-	validLogData := createValidLogData([]*Log{
+	validLogData := createValidLogData([]*LogEntry{
 		{LSN: 1, Command: compute.SetCommandID, Arguments: []string{"key1", "value1"}},
 		{LSN: 2, Command: compute.DelCommandID, Arguments: []string{"key2"}},
 		{LSN: 3, Command: compute.SetCommandID, Arguments: []string{"key3", "value3"}},
@@ -69,7 +50,7 @@ func TestFileLogsReader_Read_ValidLogs(t *testing.T) {
 
 	reader := &FileLogsReader{filesystem: mockFS}
 
-	var logs []*Log
+	var logs []*LogEntry
 	for log, err := range reader.Read() {
 		require.NoError(t, err)
 		logs = append(logs, log)
@@ -100,7 +81,7 @@ func TestFileLogsReader_Read_EmptyData(t *testing.T) {
 
 	reader := &FileLogsReader{filesystem: mockFS}
 
-	var logs []*Log
+	var logs []*LogEntry
 	for log, err := range reader.Read() {
 		require.NoError(t, err)
 		logs = append(logs, log)
@@ -143,7 +124,7 @@ func TestFileLogsReader_Read_CorruptedLSN(t *testing.T) {
 	for _, err := range reader.Read() {
 		if err != nil {
 			errorCount++
-			assert.Equal(t, ErrDecodeLSN, err)
+			assert.Equal(t, encoders.ErrDecodeLSN, err)
 		}
 	}
 
@@ -168,7 +149,7 @@ func TestFileLogsReader_Read_CorruptedCommandID(t *testing.T) {
 	for _, err := range reader.Read() {
 		if err != nil {
 			errorCount++
-			assert.Equal(t, ErrDecodeCmdID, err)
+			assert.Equal(t, encoders.ErrDecodeCmdID, err)
 		}
 	}
 
@@ -194,7 +175,7 @@ func TestFileLogsReader_Read_CorruptedArgumentsNum(t *testing.T) {
 	for _, err := range reader.Read() {
 		if err != nil {
 			errorCount++
-			assert.Equal(t, ErrDecodeArgumentsNum, err)
+			assert.Equal(t, encoders.ErrDecodeArgumentsNum, err)
 		}
 	}
 
@@ -221,7 +202,7 @@ func TestFileLogsReader_Read_CorruptedArgumentLength(t *testing.T) {
 	for _, err := range reader.Read() {
 		if err != nil {
 			errorCount++
-			assert.Equal(t, ErrDecodeArgumentLen, err)
+			assert.Equal(t, encoders.ErrDecodeArgumentLen, err)
 		}
 	}
 
@@ -252,7 +233,7 @@ func TestFileLogsReader_Read_CorruptedArgumentData(t *testing.T) {
 	for _, err := range reader.Read() {
 		if err != nil {
 			errorCount++
-			assert.Equal(t, ErrDecodeArgument, err)
+			assert.Equal(t, encoders.ErrDecodeArgument, err)
 		}
 	}
 
@@ -272,10 +253,10 @@ func TestFileLogsReader_Read_EOFHandling(t *testing.T) {
 
 	reader := &FileLogsReader{filesystem: mockFS}
 
-	var logs []*Log
+	var logs []*LogEntry
 	for log, err := range reader.Read() {
 		if err != nil {
-			assert.Equal(t, ErrDecodeCmdID, err)
+			assert.Equal(t, encoders.ErrDecodeCmdID, err)
 		} else {
 			logs = append(logs, log)
 		}
@@ -286,7 +267,7 @@ func TestFileLogsReader_Read_EOFHandling(t *testing.T) {
 }
 
 func TestFileLogsReader_Read_ZeroArguments(t *testing.T) {
-	validLogData := createValidLogData([]*Log{
+	validLogData := createValidLogData([]*LogEntry{
 		{LSN: 1, Command: compute.DelCommandID, Arguments: []string{}},
 	})
 
@@ -296,7 +277,7 @@ func TestFileLogsReader_Read_ZeroArguments(t *testing.T) {
 
 	reader := &FileLogsReader{filesystem: mockFS}
 
-	var logs []*Log
+	var logs []*LogEntry
 	for log, err := range reader.Read() {
 		require.NoError(t, err)
 		logs = append(logs, log)
@@ -307,7 +288,7 @@ func TestFileLogsReader_Read_ZeroArguments(t *testing.T) {
 }
 
 func TestFileLogsReader_Read_SingleArgument(t *testing.T) {
-	validLogData := createValidLogData([]*Log{
+	validLogData := createValidLogData([]*LogEntry{
 		{LSN: 1, Command: compute.DelCommandID, Arguments: []string{"key1"}},
 	})
 
@@ -317,7 +298,7 @@ func TestFileLogsReader_Read_SingleArgument(t *testing.T) {
 
 	reader := &FileLogsReader{filesystem: mockFS}
 
-	var logs []*Log
+	var logs []*LogEntry
 	for log, err := range reader.Read() {
 		require.NoError(t, err)
 		logs = append(logs, log)
@@ -328,7 +309,7 @@ func TestFileLogsReader_Read_SingleArgument(t *testing.T) {
 }
 
 func TestFileLogsReader_Read_MaxUint64LSN(t *testing.T) {
-	validLogData := createValidLogData([]*Log{
+	validLogData := createValidLogData([]*LogEntry{
 		{LSN: ^uint64(0), Command: compute.SetCommandID, Arguments: []string{"key", "value"}},
 	})
 
@@ -338,7 +319,7 @@ func TestFileLogsReader_Read_MaxUint64LSN(t *testing.T) {
 
 	reader := &FileLogsReader{filesystem: mockFS}
 
-	var logs []*Log
+	var logs []*LogEntry
 	for log, err := range reader.Read() {
 		require.NoError(t, err)
 		logs = append(logs, log)
@@ -350,12 +331,12 @@ func TestFileLogsReader_Read_MaxUint64LSN(t *testing.T) {
 
 func TestFileLogsReader_Read_MixedChunksWithErrors(t *testing.T) {
 	// Create valid data chunk
-	validChunk := createValidLogData([]*Log{
+	validChunk := createValidLogData([]*LogEntry{
 		{LSN: 1, Command: compute.SetCommandID, Arguments: []string{"key1", "value1"}},
 	})
 
 	// Create another valid chunk
-	validChunk2 := createValidLogData([]*Log{
+	validChunk2 := createValidLogData([]*LogEntry{
 		{LSN: 2, Command: compute.DelCommandID, Arguments: []string{"key2"}},
 	})
 
@@ -367,7 +348,7 @@ func TestFileLogsReader_Read_MixedChunksWithErrors(t *testing.T) {
 
 	reader := &FileLogsReader{filesystem: mockFS}
 
-	var logs []*Log
+	var logs []*LogEntry
 	var errorCount int
 	for log, err := range reader.Read() {
 		if err != nil {
@@ -392,7 +373,7 @@ func TestFileLogsReader_Read_PartialLogAtEndOfChunk(t *testing.T) {
 	buf := &bytes.Buffer{}
 
 	// Write one complete log
-	encodeLogHelper(&Log{LSN: 1, Command: compute.SetCommandID, Arguments: []string{"key1", "value1"}}, buf)
+	encodeLogHelper(&LogEntry{LSN: 1, Command: compute.SetCommandID, Arguments: []string{"key1", "value1"}}, buf)
 
 	// Write partial log (only LSN and command)
 	encodeLsn(2, buf)
@@ -405,12 +386,12 @@ func TestFileLogsReader_Read_PartialLogAtEndOfChunk(t *testing.T) {
 
 	reader := &FileLogsReader{filesystem: mockFS}
 
-	var logs []*Log
+	var logs []*LogEntry
 	var errorCount int
 	for log, err := range reader.Read() {
 		if err != nil {
 			errorCount++
-			assert.Equal(t, ErrDecodeArgumentsNum, err)
+			assert.Equal(t, encoders.ErrDecodeArgumentsNum, err)
 		} else {
 			logs = append(logs, log)
 		}
@@ -424,7 +405,7 @@ func TestFileLogsReader_Read_PartialLogAtEndOfChunk(t *testing.T) {
 }
 
 func TestFileLogsReader_Read_MultipleLogsInSingleChunk(t *testing.T) {
-	validLogData := createValidLogData([]*Log{
+	validLogData := createValidLogData([]*LogEntry{
 		{LSN: 1, Command: compute.SetCommandID, Arguments: []string{"key1", "value1"}},
 		{LSN: 2, Command: compute.DelCommandID, Arguments: []string{"key2"}},
 		{LSN: 3, Command: compute.SetCommandID, Arguments: []string{"key3", "value3"}},
@@ -437,7 +418,7 @@ func TestFileLogsReader_Read_MultipleLogsInSingleChunk(t *testing.T) {
 
 	reader := &FileLogsReader{filesystem: mockFS}
 
-	var logs []*Log
+	var logs []*LogEntry
 	for log, err := range reader.Read() {
 		require.NoError(t, err)
 		logs = append(logs, log)
@@ -446,7 +427,7 @@ func TestFileLogsReader_Read_MultipleLogsInSingleChunk(t *testing.T) {
 	assert.Equal(t, 4, len(logs))
 
 	// Verify all logs
-	expectedLogs := []*Log{
+	expectedLogs := []*LogEntry{
 		{LSN: 1, Command: compute.SetCommandID, Arguments: []string{"key1", "value1"}},
 		{LSN: 2, Command: compute.DelCommandID, Arguments: []string{"key2"}},
 		{LSN: 3, Command: compute.SetCommandID, Arguments: []string{"key3", "value3"}},
@@ -464,7 +445,7 @@ func TestFileLogsReader_Read_UnicodeArguments(t *testing.T) {
 	unicodeKey := "键值"
 	unicodeValue := "数据库🔑💾"
 
-	validLogData := createValidLogData([]*Log{
+	validLogData := createValidLogData([]*LogEntry{
 		{LSN: 1, Command: compute.SetCommandID, Arguments: []string{unicodeKey, unicodeValue}},
 	})
 
@@ -474,7 +455,7 @@ func TestFileLogsReader_Read_UnicodeArguments(t *testing.T) {
 
 	reader := &FileLogsReader{filesystem: mockFS}
 
-	var logs []*Log
+	var logs []*LogEntry
 	for log, err := range reader.Read() {
 		require.NoError(t, err)
 		logs = append(logs, log)
@@ -489,7 +470,7 @@ func TestFileLogsReader_Read_SpecialCharacters(t *testing.T) {
 	specialKey := "key\nwith\ttabs\rand\x00null"
 	specialValue := "value!@#$%^&*()_+{}|:<>?[]\\;'\",./"
 
-	validLogData := createValidLogData([]*Log{
+	validLogData := createValidLogData([]*LogEntry{
 		{LSN: 1, Command: compute.SetCommandID, Arguments: []string{specialKey, specialValue}},
 	})
 
@@ -499,7 +480,7 @@ func TestFileLogsReader_Read_SpecialCharacters(t *testing.T) {
 
 	reader := &FileLogsReader{filesystem: mockFS}
 
-	var logs []*Log
+	var logs []*LogEntry
 	for log, err := range reader.Read() {
 		require.NoError(t, err)
 		logs = append(logs, log)
@@ -511,7 +492,7 @@ func TestFileLogsReader_Read_SpecialCharacters(t *testing.T) {
 }
 
 func TestFileLogsReader_Read_EmptyArguments(t *testing.T) {
-	validLogData := createValidLogData([]*Log{
+	validLogData := createValidLogData([]*LogEntry{
 		{LSN: 1, Command: compute.SetCommandID, Arguments: []string{"", ""}},
 	})
 
@@ -521,7 +502,7 @@ func TestFileLogsReader_Read_EmptyArguments(t *testing.T) {
 
 	reader := &FileLogsReader{filesystem: mockFS}
 
-	var logs []*Log
+	var logs []*LogEntry
 	for log, err := range reader.Read() {
 		require.NoError(t, err)
 		logs = append(logs, log)
@@ -535,7 +516,7 @@ func TestFileLogsReader_Read_LargeArguments(t *testing.T) {
 	largeKey := string(make([]byte, 1000))
 	largeValue := string(make([]byte, 5000))
 
-	validLogData := createValidLogData([]*Log{
+	validLogData := createValidLogData([]*LogEntry{
 		{LSN: 1, Command: compute.SetCommandID, Arguments: []string{largeKey, largeValue}},
 	})
 
@@ -545,7 +526,7 @@ func TestFileLogsReader_Read_LargeArguments(t *testing.T) {
 
 	reader := &FileLogsReader{filesystem: mockFS}
 
-	var logs []*Log
+	var logs []*LogEntry
 	for log, err := range reader.Read() {
 		require.NoError(t, err)
 		logs = append(logs, log)
@@ -557,7 +538,7 @@ func TestFileLogsReader_Read_LargeArguments(t *testing.T) {
 }
 
 func TestFileLogsReader_Read_EarlyTermination(t *testing.T) {
-	validLogData := createValidLogData([]*Log{
+	validLogData := createValidLogData([]*LogEntry{
 		{LSN: 1, Command: compute.SetCommandID, Arguments: []string{"key1", "value1"}},
 		{LSN: 2, Command: compute.SetCommandID, Arguments: []string{"key2", "value2"}},
 		{LSN: 3, Command: compute.SetCommandID, Arguments: []string{"key3", "value3"}},
@@ -569,7 +550,7 @@ func TestFileLogsReader_Read_EarlyTermination(t *testing.T) {
 
 	reader := &FileLogsReader{filesystem: mockFS}
 
-	var logs []*Log
+	var logs []*LogEntry
 	count := 0
 	for log, err := range reader.Read() {
 		require.NoError(t, err)
@@ -582,6 +563,97 @@ func TestFileLogsReader_Read_EarlyTermination(t *testing.T) {
 
 	// Should only have processed 2 logs due to early termination
 	assert.Equal(t, 2, len(logs))
+}
+
+func TestFileLogsReader_ReadFromLSN_FiltersByLSN(t *testing.T) {
+	validLogData := createValidLogData([]*LogEntry{
+		{LSN: 1, Command: compute.SetCommandID, Arguments: []string{"key1", "value1"}},
+		{LSN: 2, Command: compute.DelCommandID, Arguments: []string{"key2"}},
+		{LSN: 3, Command: compute.SetCommandID, Arguments: []string{"key3", "value3"}},
+		{LSN: 4, Command: compute.SetCommandID, Arguments: []string{"key4", "value4"}},
+		{LSN: 5, Command: compute.DelCommandID, Arguments: []string{"key5"}},
+	})
+
+	mockFS := &mockFileSystemReader{
+		data: [][]byte{validLogData},
+	}
+
+	reader := &FileLogsReader{filesystem: mockFS}
+
+	tests := []struct {
+		name        string
+		fromLSN     uint64
+		expectedLSN []uint64
+	}{
+		{
+			name:        "from LSN 1 should return all logs",
+			fromLSN:     1,
+			expectedLSN: []uint64{1, 2, 3, 4, 5},
+		},
+		{
+			name:        "from LSN 3 should return logs 3,4,5",
+			fromLSN:     3,
+			expectedLSN: []uint64{3, 4, 5},
+		},
+		{
+			name:        "from LSN 5 should return only log 5",
+			fromLSN:     5,
+			expectedLSN: []uint64{5},
+		},
+		{
+			name:        "from LSN 10 should return no logs",
+			fromLSN:     10,
+			expectedLSN: []uint64{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			var logs []*LogEntry
+			for log, err := range reader.ReadFromLSN(ctx, tt.fromLSN) {
+				require.NoError(t, err)
+				logs = append(logs, log)
+			}
+
+			assert.Equal(t, len(tt.expectedLSN), len(logs))
+			for i, expectedLSN := range tt.expectedLSN {
+				assert.Equal(t, expectedLSN, logs[i].LSN)
+			}
+		})
+	}
+}
+
+func TestFileLogsReader_ReadFromLSN_ContextCancellation(t *testing.T) {
+	validLogData := createValidLogData([]*LogEntry{
+		{LSN: 1, Command: compute.SetCommandID, Arguments: []string{"key1", "value1"}},
+		{LSN: 2, Command: compute.DelCommandID, Arguments: []string{"key2"}},
+		{LSN: 3, Command: compute.SetCommandID, Arguments: []string{"key3", "value3"}},
+	})
+
+	mockFS := &mockFileSystemReader{
+		data: [][]byte{validLogData},
+	}
+
+	reader := &FileLogsReader{filesystem: mockFS}
+
+	// Test context cancellation before starting
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	var logs []*LogEntry
+	var errors []error
+	for log, err := range reader.ReadFromLSN(canceledCtx, 1) {
+		if err != nil {
+			errors = append(errors, err)
+			break
+		}
+		logs = append(logs, log)
+	}
+
+	assert.Empty(t, logs)
+	assert.NotEmpty(t, errors)
+	assert.Equal(t, context.Canceled, errors[0])
 }
 
 // Mock FileSystemReader for testing
@@ -602,6 +674,16 @@ func (m *mockFileSystemReader) ReadAll() iter.Seq2[[]byte, error] {
 			}
 		}
 	}
+}
+
+func (m *mockFileSystemReader) GetSegmentForLSN(lsn uint64) (string, error) {
+	// Simple mock implementation - return first segment
+	return "segment-1.log", nil
+}
+
+func (m *mockFileSystemReader) ReadContinuouslyFromSegment(segment string) iter.Seq2[[]byte, error] {
+	// For testing, just return the same data as ReadAll
+	return m.ReadAll()
 }
 
 // Helper function to create valid log data
@@ -630,7 +712,7 @@ func encodeArgument(arg string, buf *bytes.Buffer) {
 	buf.Write(utils.StringToBytes(arg))
 }
 
-func encodeLogHelper(log *Log, buf *bytes.Buffer) {
+func encodeLogHelper(log *LogEntry, buf *bytes.Buffer) {
 	encodeLsn(log.LSN, buf)
 	encodeCMD(log.Command, buf)
 	encodeArgumentsNum(len(log.Arguments), buf)
@@ -640,7 +722,7 @@ func encodeLogHelper(log *Log, buf *bytes.Buffer) {
 	}
 }
 
-func createValidLogData(logs []*Log) []byte {
+func createValidLogData(logs []*LogEntry) []byte {
 	buf := &bytes.Buffer{}
 	for _, log := range logs {
 		encodeLogHelper(log, buf)

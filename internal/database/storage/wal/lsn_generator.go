@@ -21,3 +21,7 @@ func (g *LSNGenerator) ResetToLSN(lsn uint64) {
 func (g *LSNGenerator) Next() uint64 {
 	return g.lsn.Add(1)
 }
+
+func (g *LSNGenerator) Current() uint64 {
+	return g.lsn.Load()
+}

@@ -22,6 +22,13 @@ type WALConfig struct {
 	DataDirectory     string `yaml:"data_directory" validate:"required"`
 }
 
+type ReplicationConfig struct {
+	Role          string `yaml:"role" validate:"required,oneof=master slave"`
+	MasterAddress string `yaml:"master_address" validate:"required_if=Role slave"`
+	MasterPort    string `yaml:"master_port" validate:"required_if=Role slave"`
+	SlaveID       string `yaml:"slave_id"` // Optional: persistent slave identity
+}
+
 type LoggingConfig struct {
 	Level  string `yaml:"level" validate:"required,oneof=debug info warn error fatal"`
 	Output string `yaml:"output"`
@@ -37,15 +44,16 @@ type NetworkConfig struct {
 }
 
 type Config struct {
-	Engine  EngineConfig  `yaml:"engine"`
-	Logging LoggingConfig `yaml:"logging"`
-	Network NetworkConfig `yaml:"network"`
-	WAL     *WALConfig    `yaml:"wal"`
+	Engine      EngineConfig       `yaml:"engine"`
+	Logging     LoggingConfig      `yaml:"logging"`
+	Network     NetworkConfig      `yaml:"network"`
+	WAL         *WALConfig         `yaml:"wal"`
+	Replication *ReplicationConfig `yaml:"replication"`
 }
 
 var (
-	ErrConfigFileMissing = errors.New("no config file path provided, set CONFIG_FILEPATH env variable")
-	validate             = validator.New()
+	ErrWALMustBeEnabled = errors.New("WAL configuration is required when replication is enabled")
+	validate            = validator.New()
 )
 
 func init() {
@@ -67,7 +75,7 @@ func validatePortRange(fl validator.FieldLevel) bool {
 func NewConfig() (*Config, error) {
 	configFilePath := os.Getenv("CONFIG_FILEPATH")
 	if configFilePath == "" {
-		return nil, ErrConfigFileMissing
+		configFilePath = "config.yaml"
 	}
 
 	data, err := os.ReadFile(configFilePath)
@@ -82,6 +90,10 @@ func NewConfig() (*Config, error) {
 
 	if err = validate.Struct(&config); err != nil {
 		return nil, err
+	}
+
+	if config.Replication != nil && config.WAL == nil {
+		return nil, ErrWALMustBeEnabled
 	}
 
 	return &config, nil

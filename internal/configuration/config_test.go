@@ -18,9 +18,19 @@ func TestNewConfig_MissingConfigFilePath(t *testing.T) {
 
 	config, err := NewConfig()
 
-	assert.Error(t, err)
-	assert.Equal(t, ErrConfigFileMissing, err)
-	assert.Nil(t, config)
+	assert.NoError(t, err)
+	assert.NotNil(t, config)
+	assert.Equal(t, "in_memory", config.Engine.Type)
+	assert.Equal(t, "info", config.Logging.Level)
+	assert.Equal(t, "stdout", config.Logging.Output)
+	assert.Equal(t, "127.0.0.1", config.Network.Ip)
+	assert.Equal(t, "3223", config.Network.Port)
+	assert.Equal(t, 100, config.Network.MaxConnections)
+	assert.Equal(t, 4096, config.Network.MaxMessageSize)
+	assert.Equal(t, 300, config.Network.IdleTimeout)
+	assert.Equal(t, 5, config.Network.GracefulShutdownTimeout)
+	assert.Nil(t, config.WAL)
+	assert.Nil(t, config.Replication)
 }
 
 func TestNewConfig_NonExistentFile(t *testing.T) {
@@ -52,7 +62,7 @@ logging:
   output: stdout
 network:
   ip: 127.0.0.1
-  port: 8080
+  port: 3223
   max_connections: 100
   max_message_size: 1024
   idle_timeout: 30
@@ -86,7 +96,7 @@ logging:
   output: stdout
 network:
   ip: 127.0.0.1
-  port: 8080
+  port: 3223
   max_connections: 100
   max_message_size: 1024
   idle_timeout: 30
@@ -106,7 +116,7 @@ network:
 	assert.Equal(t, "info", config.Logging.Level)
 	assert.Equal(t, "stdout", config.Logging.Output)
 	assert.Equal(t, "127.0.0.1", config.Network.Ip)
-	assert.Equal(t, "8080", config.Network.Port)
+	assert.Equal(t, "3223", config.Network.Port)
 	assert.Equal(t, 100, config.Network.MaxConnections)
 	assert.Equal(t, 1024, config.Network.MaxMessageSize)
 	assert.Equal(t, 30, config.Network.IdleTimeout)
@@ -129,7 +139,7 @@ logging:
   output: stdout
 network:
   ip: 127.0.0.1
-  port: 8080
+  port: 3223
   max_connections: 100
   max_message_size: 1024
   idle_timeout: 30
@@ -154,7 +164,7 @@ wal:
 	assert.Equal(t, "info", config.Logging.Level)
 	assert.Equal(t, "stdout", config.Logging.Output)
 	assert.Equal(t, "127.0.0.1", config.Network.Ip)
-	assert.Equal(t, "8080", config.Network.Port)
+	assert.Equal(t, "3223", config.Network.Port)
 	assert.Equal(t, 100, config.Network.MaxConnections)
 	assert.Equal(t, 1024, config.Network.MaxMessageSize)
 	assert.Equal(t, 30, config.Network.IdleTimeout)
@@ -205,7 +215,7 @@ logging:
   output: stdout
 network:
   ip: 127.0.0.1
-  port: 8080
+  port: 3223
   max_connections: 100
   max_message_size: 1024
   idle_timeout: 30
@@ -290,7 +300,7 @@ logging:
   output: stdout
 network:
   ip: 127.0.0.1
-  port: 8080
+  port: 3223
   max_connections: 100
   max_message_size: 1024
   idle_timeout: 30
@@ -329,19 +339,19 @@ func TestNewConfig_NetworkValidation(t *testing.T) {
 		{
 			name:        "valid IPv4",
 			ip:          "127.0.0.1",
-			port:        "8080",
+			port:        "3223",
 			shouldError: false,
 		},
 		{
 			name:        "invalid IP",
 			ip:          "invalid.ip",
-			port:        "8080",
+			port:        "3223",
 			shouldError: true,
 		},
 		{
 			name:        "empty IP",
 			ip:          "",
-			port:        "8080",
+			port:        "3223",
 			shouldError: true,
 		},
 		{
@@ -464,7 +474,7 @@ logging:
   output: stdout
 network:
   ip: 127.0.0.1
-  port: 8080
+  port: 3223
   max_connections: ` + strconv.Itoa(tt.maxConnections) + `
   max_message_size: 1024
   idle_timeout: 30
@@ -538,7 +548,7 @@ logging:
   output: stdout
 network:
   ip: 127.0.0.1
-  port: 8080
+  port: 3223
   max_connections: 100
   max_message_size: ` + strconv.Itoa(tt.maxMessageSize) + `
   idle_timeout: 30
@@ -619,7 +629,7 @@ logging:
   output: stdout
 network:
   ip: 127.0.0.1
-  port: 8080
+  port: 3223
   max_connections: 100
   max_message_size: 1024
   idle_timeout: ` + strconv.Itoa(tt.idleTimeout) + `
@@ -942,7 +952,7 @@ logging:
   output: stdout
 network:
   ip: 127.0.0.1
-  port: 8080
+  port: 3223
   max_connections: 100
   max_message_size: 1024
   idle_timeout: 30
@@ -957,7 +967,7 @@ engine:
   type: in_memory
 network:
   ip: 127.0.0.1
-  port: 8080
+  port: 3223
   max_connections: 100
   max_message_size: 1024
   idle_timeout: 30
@@ -999,4 +1009,344 @@ logging:
 			}
 		})
 	}
+}
+
+func TestNewConfig_ReplicationValidation(t *testing.T) {
+	originalPath := os.Getenv("CONFIG_FILEPATH")
+	defer os.Setenv("CONFIG_FILEPATH", originalPath)
+
+	tests := []struct {
+		name        string
+		role        string
+		masterIP    string
+		masterPort  string
+		includeWAL  bool
+		shouldError bool
+	}{
+		{
+			name:        "valid master role",
+			role:        "master",
+			masterIP:    "",
+			masterPort:  "",
+			includeWAL:  true,
+			shouldError: false,
+		},
+		{
+			name:        "valid slave role with master ip and port",
+			role:        "slave",
+			masterIP:    "127.0.0.1",
+			masterPort:  "3223",
+			includeWAL:  true,
+			shouldError: false,
+		},
+		{
+			name:        "invalid role",
+			role:        "invalid_role",
+			masterIP:    "",
+			masterPort:  "",
+			includeWAL:  true,
+			shouldError: true,
+		},
+		{
+			name:        "slave without master ip",
+			role:        "slave",
+			masterIP:    "",
+			masterPort:  "3223",
+			includeWAL:  true,
+			shouldError: true,
+		},
+		{
+			name:        "slave without master port",
+			role:        "slave",
+			masterIP:    "127.0.0.1",
+			masterPort:  "",
+			includeWAL:  true,
+			shouldError: true,
+		},
+		{
+			name:        "slave without master ip and port",
+			role:        "slave",
+			masterIP:    "",
+			masterPort:  "",
+			includeWAL:  true,
+			shouldError: true,
+		},
+		{
+			name:        "empty role",
+			role:        "",
+			masterIP:    "",
+			masterPort:  "",
+			includeWAL:  true,
+			shouldError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			configFile := filepath.Join(tmpDir, "config.yaml")
+
+			yamlContent := `
+engine:
+  type: in_memory
+logging:
+  level: info
+  output: stdout
+network:
+  ip: 127.0.0.1
+  port: 3223
+  max_connections: 100
+  max_message_size: 1024
+  idle_timeout: 30
+  graceful_shutdown_timeout: 5`
+
+			if tt.includeWAL {
+				yamlContent += `
+wal:
+  flush_batch_size: 100
+  flush_batch_timeout: 10
+  max_segment_size: 10485760
+  data_directory: "/data/kv_db/wal"`
+			}
+
+			yamlContent += `
+replication:
+  role: ` + tt.role
+
+			if tt.masterIP != "" {
+				yamlContent += `
+  master_address: ` + tt.masterIP
+			}
+
+			if tt.masterPort != "" {
+				yamlContent += `
+  master_port: ` + tt.masterPort
+			}
+
+			err := os.WriteFile(configFile, []byte(yamlContent), 0644)
+			require.NoError(t, err)
+
+			os.Setenv("CONFIG_FILEPATH", configFile)
+
+			config, err := NewConfig()
+
+			if tt.shouldError {
+				assert.Error(t, err)
+				assert.Nil(t, config)
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, config)
+				assert.NotNil(t, config.Replication)
+				assert.Equal(t, tt.role, config.Replication.Role)
+				if tt.masterIP != "" {
+					assert.Equal(t, tt.masterIP, config.Replication.MasterAddress)
+				}
+				if tt.masterPort != "" {
+					assert.Equal(t, tt.masterPort, config.Replication.MasterPort)
+				}
+			}
+		})
+	}
+}
+
+func TestNewConfig_ReplicationRequiresWAL(t *testing.T) {
+	originalPath := os.Getenv("CONFIG_FILEPATH")
+	defer os.Setenv("CONFIG_FILEPATH", originalPath)
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "config.yaml")
+
+	yamlContent := `
+engine:
+  type: in_memory
+logging:
+  level: info
+  output: stdout
+network:
+  ip: 127.0.0.1
+  port: 3223
+  max_connections: 100
+  max_message_size: 1024
+  idle_timeout: 30
+  graceful_shutdown_timeout: 5
+replication:
+  role: master
+`
+
+	err := os.WriteFile(configFile, []byte(yamlContent), 0644)
+	require.NoError(t, err)
+
+	os.Setenv("CONFIG_FILEPATH", configFile)
+
+	config, err := NewConfig()
+
+	assert.Error(t, err)
+	assert.Equal(t, ErrWALMustBeEnabled, err)
+	assert.Nil(t, config)
+}
+
+func TestNewConfig_CompleteConfigurationWithReplication(t *testing.T) {
+	originalPath := os.Getenv("CONFIG_FILEPATH")
+	defer os.Setenv("CONFIG_FILEPATH", originalPath)
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "complete.yaml")
+
+	validYAML := `
+engine:
+  type: in_memory
+logging:
+  level: debug
+  output: /var/log/kv-db.log
+network:
+  ip: 0.0.0.0
+  port: 9090
+  max_connections: 500
+  max_message_size: 2048
+  idle_timeout: 60
+  graceful_shutdown_timeout: 10
+wal:
+  flush_batch_size: 200
+  flush_batch_timeout: 20
+  max_segment_size: 20971520
+  data_directory: "/tmp/kv_db/wal"
+replication:
+  role: slave
+  master_address: "192.168.1.100"
+  master_port: "9090"
+`
+
+	err := os.WriteFile(configFile, []byte(validYAML), 0644)
+	require.NoError(t, err)
+
+	os.Setenv("CONFIG_FILEPATH", configFile)
+
+	config, err := NewConfig()
+
+	assert.NoError(t, err)
+	assert.NotNil(t, config)
+
+	// Engine validation
+	assert.Equal(t, "in_memory", config.Engine.Type)
+
+	// Logging validation
+	assert.Equal(t, "debug", config.Logging.Level)
+	assert.Equal(t, "/var/log/kv-db.log", config.Logging.Output)
+
+	// Network validation
+	assert.Equal(t, "0.0.0.0", config.Network.Ip)
+	assert.Equal(t, "9090", config.Network.Port)
+	assert.Equal(t, 500, config.Network.MaxConnections)
+	assert.Equal(t, 2048, config.Network.MaxMessageSize)
+	assert.Equal(t, 60, config.Network.IdleTimeout)
+	assert.Equal(t, 10, config.Network.GracefulShutdownTimeout)
+
+	// WAL validation
+	assert.NotNil(t, config.WAL)
+	assert.Equal(t, 200, config.WAL.FlushBatchSize)
+	assert.Equal(t, 20, config.WAL.FlushBatchTimeout)
+	assert.Equal(t, 20971520, config.WAL.MaxSegmentSize)
+	assert.Equal(t, "/tmp/kv_db/wal", config.WAL.DataDirectory)
+
+	// Replication validation
+	assert.NotNil(t, config.Replication)
+	assert.Equal(t, "slave", config.Replication.Role)
+	assert.Equal(t, "192.168.1.100", config.Replication.MasterAddress)
+	assert.Equal(t, "9090", config.Replication.MasterPort)
+}
+
+func TestNewConfig_MinimalValidConfiguration(t *testing.T) {
+	originalPath := os.Getenv("CONFIG_FILEPATH")
+	defer os.Setenv("CONFIG_FILEPATH", originalPath)
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "minimal.yaml")
+
+	minimalYAML := `
+engine:
+  type: in_memory
+logging:
+  level: error
+network:
+  ip: 127.0.0.1
+  port: 1024
+  max_connections: 1
+  max_message_size: 1
+  idle_timeout: 1
+  graceful_shutdown_timeout: 0
+`
+
+	err := os.WriteFile(configFile, []byte(minimalYAML), 0644)
+	require.NoError(t, err)
+
+	os.Setenv("CONFIG_FILEPATH", configFile)
+
+	config, err := NewConfig()
+
+	assert.NoError(t, err)
+	assert.NotNil(t, config)
+	assert.Equal(t, "in_memory", config.Engine.Type)
+	assert.Equal(t, "error", config.Logging.Level)
+	assert.Equal(t, "127.0.0.1", config.Network.Ip)
+	assert.Equal(t, "1024", config.Network.Port)
+	assert.Equal(t, 1, config.Network.MaxConnections)
+	assert.Equal(t, 1, config.Network.MaxMessageSize)
+	assert.Equal(t, 1, config.Network.IdleTimeout)
+	assert.Equal(t, 0, config.Network.GracefulShutdownTimeout)
+	assert.Nil(t, config.WAL)
+	assert.Nil(t, config.Replication)
+}
+
+func TestNewConfig_MaximumValidConfiguration(t *testing.T) {
+	originalPath := os.Getenv("CONFIG_FILEPATH")
+	defer os.Setenv("CONFIG_FILEPATH", originalPath)
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "maximum.yaml")
+
+	maximalYAML := `
+engine:
+  type: in_memory
+logging:
+  level: fatal
+  output: stderr
+network:
+  ip: 255.255.255.255
+  port: 65535
+  max_connections: 10000
+  max_message_size: 1048576
+  idle_timeout: 3600
+  graceful_shutdown_timeout: 300
+wal:
+  flush_batch_size: 1000
+  flush_batch_timeout: 1000
+  max_segment_size: 104857600
+  data_directory: "/maximum/path/to/wal"
+replication:
+  role: master
+`
+
+	err := os.WriteFile(configFile, []byte(maximalYAML), 0644)
+	require.NoError(t, err)
+
+	os.Setenv("CONFIG_FILEPATH", configFile)
+
+	config, err := NewConfig()
+
+	assert.NoError(t, err)
+	assert.NotNil(t, config)
+	assert.Equal(t, "in_memory", config.Engine.Type)
+	assert.Equal(t, "fatal", config.Logging.Level)
+	assert.Equal(t, "stderr", config.Logging.Output)
+	assert.Equal(t, "255.255.255.255", config.Network.Ip)
+	assert.Equal(t, "65535", config.Network.Port)
+	assert.Equal(t, 10000, config.Network.MaxConnections)
+	assert.Equal(t, 1048576, config.Network.MaxMessageSize)
+	assert.NotNil(t, config.WAL)
+	assert.Equal(t, 1000, config.WAL.FlushBatchSize)
+	assert.Equal(t, 1000, config.WAL.FlushBatchTimeout)
+	assert.Equal(t, 104857600, config.WAL.MaxSegmentSize)
+	assert.Equal(t, "/maximum/path/to/wal", config.WAL.DataDirectory)
+	assert.NotNil(t, config.Replication)
+	assert.Equal(t, "master", config.Replication.Role)
 }

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
-	"os"
 	"testing"
 
 	"github.com/EzhovAndrew/kv-db/internal/database/compute"
@@ -14,33 +13,16 @@ import (
 )
 
 func TestNewFileLogsWriter(t *testing.T) {
-	tests := []struct {
-		name           string
-		dataDir        string
-		maxSegmentSize int
-	}{
-		{
-			name:           "valid configuration",
-			dataDir:        "/tmp/wal",
-			maxSegmentSize: 1024,
-		},
-		{
-			name:           "small segment size",
-			dataDir:        "./data",
-			maxSegmentSize: 4096,
-		},
-	}
+	mockFS := &mockFileSystemWriteSyncer{}
+	writer := NewFileLogsWriter(mockFS)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			writer := NewFileLogsWriter(tt.dataDir, tt.maxSegmentSize)
-			defer os.RemoveAll(tt.dataDir)
+	assert.NotNil(t, writer)
+	assert.NotNil(t, writer.filesystem)
+	assert.NotNil(t, writer.buf)
 
-			assert.NotNil(t, writer)
-			assert.NotNil(t, writer.filesystem)
-			assert.NotNil(t, writer.buf)
-		})
-	}
+	// Verify buffer is properly initialized and pre-grown
+	assert.Equal(t, 0, writer.buf.Len())             // Should be empty initially
+	assert.GreaterOrEqual(t, writer.buf.Cap(), 9192) // Should have capacity of at least 9192
 }
 
 func TestFileLogsWriter_Write_EmptyLogs(t *testing.T) {
@@ -50,10 +32,34 @@ func TestFileLogsWriter_Write_EmptyLogs(t *testing.T) {
 		buf:        &bytes.Buffer{},
 	}
 
-	err := writer.Write([]*Log{})
+	err := writer.Write([]*LogEntry{})
 
 	assert.NoError(t, err)
 	assert.Equal(t, 0, len(mockFS.getWrittenData()))
+
+	// Verify no filesystem calls were made
+	writeCalls := mockFS.getWriteCalls()
+	assert.Equal(t, 0, len(writeCalls))
+
+	// Verify buffer remains clean
+	assert.Equal(t, 0, writer.buf.Len())
+}
+
+func TestFileLogsWriter_Write_NilLogs(t *testing.T) {
+	mockFS := &mockFileSystemWriteSyncer{}
+	writer := &FileLogsWriter{
+		filesystem: mockFS,
+		buf:        &bytes.Buffer{},
+	}
+
+	err := writer.Write(nil)
+
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(mockFS.getWrittenData()))
+
+	// Verify no filesystem calls were made
+	writeCalls := mockFS.getWriteCalls()
+	assert.Equal(t, 0, len(writeCalls))
 }
 
 func TestFileLogsWriter_Write_SingleLog(t *testing.T) {
@@ -63,7 +69,7 @@ func TestFileLogsWriter_Write_SingleLog(t *testing.T) {
 		buf:        &bytes.Buffer{},
 	}
 
-	logs := []*Log{
+	logs := []*LogEntry{
 		{LSN: 1, Command: compute.SetCommandID, Arguments: []string{"key1", "value1"}},
 	}
 
@@ -84,7 +90,7 @@ func TestFileLogsWriter_Write_MultipleLogs(t *testing.T) {
 		buf:        &bytes.Buffer{},
 	}
 
-	logs := []*Log{
+	logs := []*LogEntry{
 		{LSN: 1, Command: compute.SetCommandID, Arguments: []string{"key1", "value1"}},
 		{LSN: 2, Command: compute.DelCommandID, Arguments: []string{"key2"}},
 		{LSN: 3, Command: compute.SetCommandID, Arguments: []string{"key3", "value3"}},
@@ -108,7 +114,7 @@ func TestFileLogsWriter_Write_FileSystemError(t *testing.T) {
 		buf:        &bytes.Buffer{},
 	}
 
-	logs := []*Log{
+	logs := []*LogEntry{
 		{LSN: 1, Command: compute.SetCommandID, Arguments: []string{"key1", "value1"}},
 	}
 
@@ -125,7 +131,7 @@ func TestFileLogsWriter_Write_PanicRecovery(t *testing.T) {
 		buf:        &bytes.Buffer{},
 	}
 
-	logs := []*Log{
+	logs := []*LogEntry{
 		{LSN: 1, Command: compute.SetCommandID, Arguments: []string{"key1", "value1"}},
 	}
 
@@ -145,7 +151,7 @@ func TestFileLogsWriter_Write_SpecialCharacters(t *testing.T) {
 	specialKey := "key\nwith\ttabs\rand\x00null"
 	specialValue := "value!@#$%^&*()_+{}|:<>?[]\\;'\",./"
 
-	logs := []*Log{
+	logs := []*LogEntry{
 		{LSN: 1, Command: compute.SetCommandID, Arguments: []string{specialKey, specialValue}},
 	}
 
@@ -168,7 +174,7 @@ func TestFileLogsWriter_Write_UnicodeCharacters(t *testing.T) {
 	unicodeKey := "键值"
 	unicodeValue := "数据库🔑💾"
 
-	logs := []*Log{
+	logs := []*LogEntry{
 		{LSN: 1, Command: compute.SetCommandID, Arguments: []string{unicodeKey, unicodeValue}},
 	}
 
@@ -188,7 +194,7 @@ func TestFileLogsWriter_Write_EmptyArguments(t *testing.T) {
 		buf:        &bytes.Buffer{},
 	}
 
-	logs := []*Log{
+	logs := []*LogEntry{
 		{LSN: 1, Command: compute.SetCommandID, Arguments: []string{"", ""}},
 		{LSN: 2, Command: compute.DelCommandID, Arguments: []string{}},
 	}
@@ -212,7 +218,7 @@ func TestFileLogsWriter_Write_LargeArguments(t *testing.T) {
 	largeKey := string(make([]byte, 1000))
 	largeValue := string(make([]byte, 5000))
 
-	logs := []*Log{
+	logs := []*LogEntry{
 		{LSN: 1, Command: compute.SetCommandID, Arguments: []string{largeKey, largeValue}},
 	}
 
@@ -232,7 +238,7 @@ func TestFileLogsWriter_Write_MaxLSN(t *testing.T) {
 		buf:        &bytes.Buffer{},
 	}
 
-	logs := []*Log{
+	logs := []*LogEntry{
 		{LSN: ^uint64(0), Command: compute.SetCommandID, Arguments: []string{"key", "value"}},
 	}
 
@@ -245,37 +251,6 @@ func TestFileLogsWriter_Write_MaxLSN(t *testing.T) {
 	verifyEncodedLog(t, writtenData[0], logs[0])
 }
 
-func TestFileLogsWriter_Write_BufferReuse(t *testing.T) {
-	mockFS := &mockFileSystemWriteSyncer{}
-	writer := &FileLogsWriter{
-		filesystem: mockFS,
-		buf:        &bytes.Buffer{},
-	}
-
-	// First write
-	logs1 := []*Log{
-		{LSN: 1, Command: compute.SetCommandID, Arguments: []string{"key1", "value1"}},
-	}
-
-	err := writer.Write(logs1)
-	require.NoError(t, err)
-
-	// Second write - buffer should be reset
-	logs2 := []*Log{
-		{LSN: 2, Command: compute.DelCommandID, Arguments: []string{"key2"}},
-	}
-
-	err = writer.Write(logs2)
-	require.NoError(t, err)
-
-	writtenData := mockFS.getWrittenData()
-	assert.Equal(t, 2, len(writtenData))
-
-	// Verify each write contains only its respective logs
-	verifyEncodedLog(t, writtenData[0], logs1[0])
-	verifyEncodedLog(t, writtenData[1], logs2[0])
-}
-
 func TestFileLogsWriter_Write_MixedCommands(t *testing.T) {
 	mockFS := &mockFileSystemWriteSyncer{}
 	writer := &FileLogsWriter{
@@ -283,7 +258,7 @@ func TestFileLogsWriter_Write_MixedCommands(t *testing.T) {
 		buf:        &bytes.Buffer{},
 	}
 
-	logs := []*Log{
+	logs := []*LogEntry{
 		{LSN: 1, Command: compute.SetCommandID, Arguments: []string{"key1", "value1"}},
 		{LSN: 2, Command: compute.DelCommandID, Arguments: []string{"key2"}},
 		{LSN: 3, Command: compute.SetCommandID, Arguments: []string{"key3", "value3"}},
@@ -299,9 +274,160 @@ func TestFileLogsWriter_Write_MixedCommands(t *testing.T) {
 	verifyEncodedLogs(t, writtenData[0], logs)
 }
 
+func TestFileLogsWriter_Write_LSNPassedToFilesystem(t *testing.T) {
+	mockFS := &mockFileSystemWriteSyncer{}
+	writer := &FileLogsWriter{
+		filesystem: mockFS,
+		buf:        &bytes.Buffer{},
+	}
+
+	tests := []struct {
+		name        string
+		logs        []*LogEntry
+		expectedLSN uint64
+	}{
+		{
+			name: "single log with LSN 100",
+			logs: []*LogEntry{
+				{LSN: 100, Command: compute.SetCommandID, Arguments: []string{"key", "value"}},
+			},
+			expectedLSN: 100,
+		},
+		{
+			name: "multiple logs - first LSN should be passed",
+			logs: []*LogEntry{
+				{LSN: 50, Command: compute.SetCommandID, Arguments: []string{"key1", "value1"}},
+				{LSN: 51, Command: compute.DelCommandID, Arguments: []string{"key2"}},
+				{LSN: 52, Command: compute.SetCommandID, Arguments: []string{"key3", "value3"}},
+			},
+			expectedLSN: 50,
+		},
+		{
+			name: "max uint64 LSN",
+			logs: []*LogEntry{
+				{LSN: ^uint64(0), Command: compute.SetCommandID, Arguments: []string{"key", "value"}},
+			},
+			expectedLSN: ^uint64(0),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Reset mock for each test
+			mockFS.writtenData = nil
+			mockFS.writeError = nil
+
+			err := writer.Write(tt.logs)
+			require.NoError(t, err)
+
+			writeCalls := mockFS.getWriteCalls()
+			require.Equal(t, 1, len(writeCalls))
+
+			// Verify the LSN was passed correctly
+			assert.Equal(t, tt.expectedLSN, writeCalls[0].lsnStart)
+
+			// Verify the data was encoded correctly
+			verifyEncodedLogs(t, writeCalls[0].data, tt.logs)
+		})
+	}
+}
+
+func TestFileLogsWriter_Write_NilLogValidation(t *testing.T) {
+	mockFS := &mockFileSystemWriteSyncer{}
+	writer := &FileLogsWriter{
+		filesystem: mockFS,
+		buf:        &bytes.Buffer{},
+	}
+
+	tests := []struct {
+		name          string
+		logs          []*LogEntry
+		expectedError string
+	}{
+		{
+			name: "nil middle log",
+			logs: []*LogEntry{
+				{LSN: 1, Command: compute.SetCommandID, Arguments: []string{"key1", "value1"}},
+				nil,
+				{LSN: 3, Command: compute.SetCommandID, Arguments: []string{"key3", "value3"}},
+			},
+			expectedError: "log entry cannot be nil",
+		},
+		{
+			name: "nil last log",
+			logs: []*LogEntry{
+				{LSN: 1, Command: compute.SetCommandID, Arguments: []string{"key1", "value1"}},
+				{LSN: 2, Command: compute.DelCommandID, Arguments: []string{"key2"}},
+				nil,
+			},
+			expectedError: "log entry cannot be nil",
+		},
+		{
+			name:          "all nil logs",
+			logs:          []*LogEntry{nil, nil, nil},
+			expectedError: "log entry cannot be nil",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := writer.Write(tt.logs)
+
+			assert.Error(t, err)
+			assert.Equal(t, tt.expectedError, err.Error())
+
+			// Verify no data was written on error
+			writeCalls := mockFS.getWriteCalls()
+			assert.Equal(t, 0, len(writeCalls))
+
+			// Reset mock for next test
+			mockFS.writtenData = nil
+		})
+	}
+}
+
+func TestFileLogsWriter_Write_BufferResetBetweenWrites(t *testing.T) {
+	mockFS := &mockFileSystemWriteSyncer{}
+	writer := &FileLogsWriter{
+		filesystem: mockFS,
+		buf:        &bytes.Buffer{},
+	}
+
+	// First write
+	logs1 := []*LogEntry{
+		{LSN: 10, Command: compute.SetCommandID, Arguments: []string{"key1", "value1"}},
+	}
+	err := writer.Write(logs1)
+	require.NoError(t, err)
+
+	// Verify buffer is empty after first write
+	assert.Equal(t, 0, writer.buf.Len())
+
+	// Second write with different data
+	logs2 := []*LogEntry{
+		{LSN: 20, Command: compute.DelCommandID, Arguments: []string{"key2"}},
+	}
+	err = writer.Write(logs2)
+	require.NoError(t, err)
+
+	// Verify buffer is empty after second write
+	assert.Equal(t, 0, writer.buf.Len())
+
+	// Verify both writes were made separately
+	writeCalls := mockFS.getWriteCalls()
+	require.Equal(t, 2, len(writeCalls))
+
+	assert.Equal(t, uint64(10), writeCalls[0].lsnStart)
+	assert.Equal(t, uint64(20), writeCalls[1].lsnStart)
+
+	// Verify each write contains only its respective logs
+	verifyEncodedLog(t, writeCalls[0].data, logs1[0])
+	verifyEncodedLog(t, writeCalls[1].data, logs2[0])
+}
+
 // Helper functions for verification
 
-func verifyEncodedLog(t *testing.T, data []byte, expectedLog *Log) {
+func verifyEncodedLog(t *testing.T, data []byte, expectedLog *LogEntry) {
 	buf := bytes.NewReader(data)
 
 	// Decode LSN
@@ -333,7 +459,7 @@ func verifyEncodedLog(t *testing.T, data []byte, expectedLog *Log) {
 	}
 }
 
-func verifyEncodedLogs(t *testing.T, data []byte, expectedLogs []*Log) {
+func verifyEncodedLogs(t *testing.T, data []byte, expectedLogs []*LogEntry) {
 	buf := bytes.NewReader(data)
 
 	for i, expectedLog := range expectedLogs {
@@ -373,25 +499,41 @@ func verifyEncodedLogs(t *testing.T, data []byte, expectedLogs []*Log) {
 
 // Mock FileSystemWriteSyncer for testing
 type mockFileSystemWriteSyncer struct {
-	writtenData  [][]byte
+	writtenData  []mockWriteCall
 	writeError   error
 	panicOnWrite bool
 }
 
-func (m *mockFileSystemWriteSyncer) WriteSync(data []byte) error {
+type mockWriteCall struct {
+	data     []byte
+	lsnStart uint64
+}
+
+func (m *mockFileSystemWriteSyncer) WriteSync(data []byte, lsnStart uint64) error {
 	if m.panicOnWrite {
 		panic("mock filesystem panic")
 	}
 	if m.writeError != nil {
 		return m.writeError
 	}
-	// Store a copy of the data
+	// Store a copy of the data with LSN
 	dataCopy := make([]byte, len(data))
 	copy(dataCopy, data)
-	m.writtenData = append(m.writtenData, dataCopy)
+	m.writtenData = append(m.writtenData, mockWriteCall{
+		data:     dataCopy,
+		lsnStart: lsnStart,
+	})
 	return nil
 }
 
 func (m *mockFileSystemWriteSyncer) getWrittenData() [][]byte {
+	result := make([][]byte, len(m.writtenData))
+	for i, call := range m.writtenData {
+		result[i] = call.data
+	}
+	return result
+}
+
+func (m *mockFileSystemWriteSyncer) getWriteCalls() []mockWriteCall {
 	return m.writtenData
 }
