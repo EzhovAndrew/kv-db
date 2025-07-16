@@ -17,17 +17,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestMain initializes the logger before running tests
 func TestMain(m *testing.M) {
-	// Initialize the logger for tests
 	logConfig := &configuration.LoggingConfig{
-		Level:  "error", // Reduce log noise in tests
+		Level:  "error",
 		Output: "stdout",
 	}
 
 	logging.Init(logConfig)
 
-	// Run tests
 	m.Run()
 }
 

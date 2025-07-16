@@ -15,47 +15,37 @@ import (
 	"go.uber.org/zap"
 )
 
-// LogEntry represents a single WAL log entry
 type LogEntry = encoders.Log
 
-// LogMessage represents a log entry and its associated future for internal communication
 type LogMessage struct {
 	entry  *LogEntry
 	future *Future
 }
 
-// LogsWriter defines the interface for writing log entries to persistent storage
 type LogsWriter interface {
 	Write(logs []*LogEntry) error
 }
 
-// LogsReader defines the interface for reading log entries from persistent storage
 type LogsReader interface {
 	Read() iter.Seq2[*LogEntry, error]
 	ReadFromLSN(ctx context.Context, lsn uint64) iter.Seq2[*LogEntry, error]
 }
 
-// WAL represents the Write-Ahead Log with batching and async processing
 type WAL struct {
-	// Core components
 	batch      []*LogEntry
 	logsWriter LogsWriter
 	logsReader LogsReader
 
-	// Communication channels
 	newLogsChan    chan LogMessage
 	pendingFutures []*Future
 
-	// LSN management
 	lsnGenerator *LSNGenerator
 
-	// Shutdown coordination
 	shutdownChan chan struct{}
 	closed       bool
 	shutdownOnce sync.Once
 }
 
-// NewWAL creates a new WAL instance with the given configuration
 func NewWAL(config *configuration.WALConfig) *WAL {
 	fileSystem := filesystem.NewSegmentedFileSystem(config.DataDirectory, config.MaxSegmentSize)
 	wal := &WAL{
@@ -71,7 +61,6 @@ func NewWAL(config *configuration.WALConfig) *WAL {
 	return wal
 }
 
-// Recover returns all log entries from persistent storage for recovery purposes
 func (w *WAL) Recover() iter.Seq2[*LogEntry, error] {
 	return func(yield func(*LogEntry, error) bool) {
 		for log, err := range w.logsReader.Read() {
@@ -82,12 +71,10 @@ func (w *WAL) Recover() iter.Seq2[*LogEntry, error] {
 	}
 }
 
-// SetLastLSN sets the last known LSN for recovery purposes
 func (w *WAL) SetLastLSN(lsn uint64) {
 	w.lsnGenerator.ResetToLSN(lsn)
 }
 
-// handleNewLogs processes incoming log entries in a single goroutine
 func (w *WAL) handleNewLogs(config *configuration.WALConfig) {
 	flushTimeout := time.Duration(config.FlushBatchTimeout)
 	timer := w.createFlushTimer(flushTimeout)
@@ -108,17 +95,14 @@ func (w *WAL) handleNewLogs(config *configuration.WALConfig) {
 	}
 }
 
-// createFlushTimer creates and initializes a flush timer
 func (w *WAL) createFlushTimer(flushTimeout time.Duration) *time.Timer {
 	timer := time.NewTimer(flushTimeout)
-	// Initially stop the timer since we have no logs to flush
 	if !timer.Stop() {
 		<-timer.C
 	}
 	return timer
 }
 
-// handleShutdown processes the shutdown sequence
 func (w *WAL) handleShutdown() {
 	if err := w.flushToDisk(); err != nil {
 		logging.Error("Failed to flush during shutdown", zap.Error(err))
@@ -140,18 +124,16 @@ func (w *WAL) handleNewLogMessage(
 		timer.Reset(flushTimeout)
 	}
 
-	// Add log to batch
 	w.batch = append(w.batch, logMessage.entry)
 	w.pendingFutures = append(w.pendingFutures, logMessage.future)
 
-	// Flush if batch is full
 	if len(w.batch) >= config.FlushBatchSize {
 		w.stopTimer(timer)
 		w.flushAndRespond()
 	}
 }
 
-// handleFlushTimeout processes a flush timeout
+// handleFlushTimeout processes a flush timeout - flush the batch and respond to clients
 func (w *WAL) handleFlushTimeout() {
 	w.flushAndRespond()
 }
@@ -192,7 +174,6 @@ func (w *WAL) flushToDisk() error {
 	return err
 }
 
-// Shutdown gracefully shuts down the WAL
 func (w *WAL) Shutdown() {
 	w.shutdownOnce.Do(func() {
 		w.closed = true
@@ -237,7 +218,6 @@ func (w *WAL) executeOperation(entry *LogEntry) *Future {
 	return future
 }
 
-// Set adds a set operation to the WAL and returns a future
 func (w *WAL) Set(key, value string) *Future {
 	lsn := w.lsnGenerator.Next()
 	entry := &LogEntry{
@@ -248,7 +228,6 @@ func (w *WAL) Set(key, value string) *Future {
 	return w.executeOperation(entry)
 }
 
-// Delete adds a delete operation to the WAL and returns a future
 func (w *WAL) Delete(key string) *Future {
 	lsn := w.lsnGenerator.Next()
 	entry := &LogEntry{
@@ -259,7 +238,6 @@ func (w *WAL) Delete(key string) *Future {
 	return w.executeOperation(entry)
 }
 
-// GetLastLSN returns the last assigned LSN
 func (w *WAL) GetLastLSN() uint64 {
 	return w.lsnGenerator.Current()
 }
@@ -301,7 +279,6 @@ func (w *WAL) WriteLogs(logs []*LogEntry) error {
 	return nil
 }
 
-// ReadLogsFromLSN reads log entries starting from the given LSN
 func (w *WAL) ReadLogsFromLSN(ctx context.Context, lsn uint64) iter.Seq2[*LogEntry, error] {
 	return func(yield func(*LogEntry, error) bool) {
 		for log, err := range w.logsReader.ReadFromLSN(ctx, lsn) {

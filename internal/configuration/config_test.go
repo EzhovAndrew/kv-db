@@ -18,9 +18,19 @@ func TestNewConfig_MissingConfigFilePath(t *testing.T) {
 
 	config, err := NewConfig()
 
-	assert.Error(t, err)
-	assert.Equal(t, ErrConfigFileMissing, err)
-	assert.Nil(t, config)
+	assert.NoError(t, err)
+	assert.NotNil(t, config)
+	assert.Equal(t, "in_memory", config.Engine.Type)
+	assert.Equal(t, "info", config.Logging.Level)
+	assert.Equal(t, "stdout", config.Logging.Output)
+	assert.Equal(t, "127.0.0.1", config.Network.Ip)
+	assert.Equal(t, "3223", config.Network.Port)
+	assert.Equal(t, 100, config.Network.MaxConnections)
+	assert.Equal(t, 4096, config.Network.MaxMessageSize)
+	assert.Equal(t, 300, config.Network.IdleTimeout)
+	assert.Equal(t, 5, config.Network.GracefulShutdownTimeout)
+	assert.Nil(t, config.WAL)
+	assert.Nil(t, config.Replication)
 }
 
 func TestNewConfig_NonExistentFile(t *testing.T) {

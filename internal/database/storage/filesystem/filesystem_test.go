@@ -14,13 +14,10 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	// Initialize logging once before all tests
 	logging.Init(&configuration.LoggingConfig{})
 
-	// Run all tests
 	code := m.Run()
 
-	// Exit with the test result code
 	os.Exit(code)
 }
 

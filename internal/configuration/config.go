@@ -52,9 +52,8 @@ type Config struct {
 }
 
 var (
-	ErrConfigFileMissing = errors.New("no config file path provided, set CONFIG_FILEPATH env variable")
-	ErrWALMustBeEnabled  = errors.New("WAL configuration is required when replication is enabled")
-	validate             = validator.New()
+	ErrWALMustBeEnabled = errors.New("WAL configuration is required when replication is enabled")
+	validate            = validator.New()
 )
 
 func init() {
@@ -76,7 +75,7 @@ func validatePortRange(fl validator.FieldLevel) bool {
 func NewConfig() (*Config, error) {
 	configFilePath := os.Getenv("CONFIG_FILEPATH")
 	if configFilePath == "" {
-		return nil, ErrConfigFileMissing
+		configFilePath = "config.yaml"
 	}
 
 	data, err := os.ReadFile(configFilePath)

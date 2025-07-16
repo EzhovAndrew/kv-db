@@ -101,7 +101,6 @@ func (c *TCPClient) StartPushMode(ctx context.Context, handler MessageHandler) e
 	})
 }
 
-// StopPushMode stops the push mode listening
 func (c *TCPClient) StopPushMode() {
 	concurrency.WithLock(&c.pushMutex, func() error {
 		c.stopExistingPushMode()
@@ -109,7 +108,6 @@ func (c *TCPClient) StopPushMode() {
 	})
 }
 
-// IsPushMode returns whether client is in push mode
 func (c *TCPClient) IsPushMode() bool {
 	var result bool
 	concurrency.WithLock(c.pushMutex.RLocker(), func() error {
@@ -120,7 +118,6 @@ func (c *TCPClient) IsPushMode() bool {
 }
 
 func (c *TCPClient) Close() error {
-	// Stop push mode first
 	c.StopPushMode()
 
 	if c.conn == nil {
@@ -379,7 +376,6 @@ func (c *TCPClient) sendResponse(response []byte) error {
 	return nil
 }
 
-// getRemoteAddrString safely gets the remote address as string
 func (c *TCPClient) getRemoteAddrString() string {
 	if c.conn != nil {
 		return c.conn.RemoteAddr().String()

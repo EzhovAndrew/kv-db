@@ -31,7 +31,7 @@ echo "🚀 Running tests..."
 while IFS= read -r dir; do
     echo "----------------------------------------"
     
-    if cd "$dir" && gotestsum --format dots .; then
+    if gotestsum --format dots "$dir"; then
         echo "✅ PASSED: $dir"
         ((passed_packages++))
     else
@@ -39,8 +39,6 @@ while IFS= read -r dir; do
         ((failed_packages++))
     fi
     
-    # Return to repository root
-    cd - > /dev/null
     echo ""
 done <<< "$test_dirs"
 

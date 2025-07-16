@@ -19,7 +19,6 @@ type FileMetadataManager struct {
 	mu               sync.Mutex
 	fd               *os.File
 
-	// Cache for metadata to avoid repeated file reads
 	metadataCache atomic.Pointer[[]*WALMetadata]
 	cacheValid    atomic.Bool
 }
@@ -50,7 +49,6 @@ func NewFileMetadataManager(metadataFilePath string) (*FileMetadataManager, erro
 		fd:               fd,
 	}
 
-	// Pre-load cache on initialization
 	if err := manager.refreshCache(); err != nil {
 		logging.Warn("Failed to pre-load metadata cache", zap.Error(err))
 	}
@@ -70,14 +68,12 @@ func (m *FileMetadataManager) AddNewSegmentOffset(segmentFilename string, lsnSta
 				return err
 			}
 
-			// Invalidate cache after metadata changes
 			m.invalidateCache()
 			return nil
 		},
 	)
 }
 
-// refreshCache loads metadata from file and updates the cache
 func (m *FileMetadataManager) refreshCache() error {
 	return concurrency.WithLock(
 		&m.mu,
@@ -118,7 +114,6 @@ func (m *FileMetadataManager) refreshCache() error {
 	)
 }
 
-// getCachedMetadata returns cached metadata, refreshing if necessary
 func (m *FileMetadataManager) getCachedMetadata() ([]*WALMetadata, error) {
 	if !m.cacheValid.Load() {
 		if err := m.refreshCache(); err != nil {
@@ -137,7 +132,6 @@ func (m *FileMetadataManager) getCachedMetadata() ([]*WALMetadata, error) {
 	return result, nil
 }
 
-// invalidateCache marks the cache as invalid
 func (m *FileMetadataManager) invalidateCache() {
 	m.cacheValid.Store(false)
 }

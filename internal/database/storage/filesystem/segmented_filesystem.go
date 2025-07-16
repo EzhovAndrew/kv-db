@@ -28,11 +28,17 @@ type SegmentedFileSystem struct {
 	maxSegmentSize int
 	currentSegment atomic.Pointer[Segment]
 	mm             MetadataManager
-	readBufferSize int // Buffer size for streaming reads
+	readBufferSize int
+}
+
+func createDir(dataDir string) error {
+	return os.MkdirAll(dataDir, 0755)
 }
 
 func NewSegmentedFileSystem(dataDir string, maxSegmentSize int) *SegmentedFileSystem {
-	// TODO: add option to config to choose metadata file path
+	if err := createDir(dataDir); err != nil {
+		logging.Fatal("Failed to create directory for WAL logs", zap.Error(err))
+	}
 	mm, err := NewFileMetadataManager(filepath.Join(dataDir, "metadata.txt"))
 	if err != nil {
 		logging.Fatal("Failed to initialize metadata manager", zap.Error(err))
@@ -41,10 +47,7 @@ func NewSegmentedFileSystem(dataDir string, maxSegmentSize int) *SegmentedFileSy
 		dataDir:        dataDir,
 		maxSegmentSize: maxSegmentSize,
 		mm:             mm,
-		readBufferSize: 64 * 1024, // 64KB default buffer for streaming reads
-	}
-	if err := s.createDir(); err != nil {
-		logging.Fatal("Failed to create directory for WAL logs", zap.Error(err))
+		readBufferSize: 64 * 1024,
 	}
 	if err := s.initializeSegments(); err != nil {
 		logging.Fatal("Failed to initialize segments", zap.Error(err))
@@ -84,7 +87,6 @@ func (fs *SegmentedFileSystem) initializeSegments() error {
 	return nil
 }
 
-// getNextValidLSN safely determines the next LSN to use, handling potential gaps
 func (fs *SegmentedFileSystem) getNextValidLSN(segmentFilename string) (uint64, error) {
 	filePath := filepath.Join(fs.dataDir, segmentFilename)
 	data, err := os.ReadFile(filePath)
@@ -93,33 +95,25 @@ func (fs *SegmentedFileSystem) getNextValidLSN(segmentFilename string) (uint64, 
 	}
 
 	if len(data) == 0 {
-		// Empty file, return 0 which will be handled appropriately
 		return 0, nil
 	}
 
 	lastLSN, err := encoders.GetLastLSNInData(data)
 	if err != nil {
-		// If we can't decode the data, it might be corrupted
-		// Log warning and use a safe fallback
 		logging.Warn("Failed to decode LSN from segment data, using metadata LSN as fallback",
 			zap.String("segment", segmentFilename),
 			zap.Error(err))
 
-		// Fallback to using a high LSN to avoid conflicts
-		// This is safer than potentially reusing LSNs
 		return fs.getHighestKnownLSN() + 10000, nil
 	}
 
 	return lastLSN + 1, nil
 }
 
-// getHighestKnownLSN scans all metadata to find the highest known LSN
 func (fs *SegmentedFileSystem) getHighestKnownLSN() uint64 {
-	// This is a safety fallback - in practice, you might want to implement
-	// a more sophisticated recovery mechanism
 	walFiles, err := fs.mm.GetWALFilesMetadata()
 	if err != nil {
-		return 1000000 // Very conservative fallback
+		return 1000000
 	}
 
 	var maxLSN uint64
@@ -230,10 +224,6 @@ func (fs *SegmentedFileSystem) rotateSegment(startLsn uint64) error {
 	// Only store atomically after metadata is successfully written
 	fs.currentSegment.Store(newSegment)
 	return nil
-}
-
-func (fs *SegmentedFileSystem) createDir() error {
-	return os.MkdirAll(fs.dataDir, 0755)
 }
 
 // Close properly shuts down the segmented filesystem
