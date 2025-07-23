@@ -171,7 +171,7 @@ func (rm *ReplicationManager) extractOrGenerateSlaveID(lsnSync map[string]any, l
 
 // registerSlave adds slave to master state
 func (rm *ReplicationManager) registerSlave(masterState *MasterState, slave *SlaveConnection) {
-	concurrency.WithLock(&masterState.mu, func() error {
+	concurrency.WithLock(&masterState.mu, func() error { // nolint:errcheck
 		masterState.slaves[slave.ID] = slave
 		return nil
 	})
@@ -302,7 +302,7 @@ func (rm *ReplicationManager) GetMinimumSlaveLSN() uint64 {
 	var minLSN = ^uint64(0) // Start with MaxUint64
 	hasSlaves := false
 
-	concurrency.WithLock(&rm.masterState.mu, func() error {
+	concurrency.WithLock(&rm.masterState.mu, func() error { // nolint:errcheck
 		for _, slave := range rm.masterState.slaves {
 			hasSlaves = true
 			if slave.LastLSN < minLSN {

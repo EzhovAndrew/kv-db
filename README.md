@@ -312,7 +312,8 @@ Your input helps me grow as a developer! 🚀
 ## 🎯 Roadmap
 
 - [ ] Integration tests
-- [ ] Sharded hash map in engine
+- [ ] SDK
+- [X] Sharded hash map in engine
 - [ ] WAL segments compaction
 - [ ] Query language extensions
 - [ ] Metrics and monitoring

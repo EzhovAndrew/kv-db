@@ -140,7 +140,7 @@ func main() {
 		fallbackClient(client)
 		return
 	}
-	defer rl.Close() //nolint:errcheck
+	defer rl.Close() // nolint:errcheck
 
 	for {
 		line, err := rl.Readline()

@@ -362,7 +362,7 @@ func (fs *SegmentedFileSystem) readCurrentSegmentIncremental(segmentName string,
 	if err != nil {
 		return nil, offset, fmt.Errorf("failed to open current segment %s: %w", segmentPath, err)
 	}
-	defer file.Close()
+	defer file.Close() // nolint:errcheck
 
 	data := make([]byte, readSize)
 	n, err := file.ReadAt(data, offset)
@@ -381,7 +381,7 @@ func (fs *SegmentedFileSystem) readCompleteSegmentFromOffset(segmentName string,
 	if err != nil {
 		return nil, fmt.Errorf("failed to open segment %s: %w", segmentPath, err)
 	}
-	defer file.Close()
+	defer file.Close() // nolint:errcheck
 
 	// Get file size
 	fileInfo, err := file.Stat()

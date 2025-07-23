@@ -5,44 +5,57 @@ import (
 	"time"
 )
 
+// FutureResult represents the result of a WAL operation
+type FutureResult struct {
+	lsn   uint64
+	count int
+	err   error
+}
+
+func (r *FutureResult) LSN() uint64 {
+	return r.lsn
+}
+
+func (r *FutureResult) Count() int {
+	return r.count
+}
+
+func (r *FutureResult) Error() error {
+	return r.err
+}
+
 // Future represents a pending WAL operation result
 type Future struct {
-	done chan struct{}
-	lsn  uint64
-	err  error
-	once sync.Once
+	done   chan struct{}
+	result *FutureResult
+	once   sync.Once
 }
 
 func (f *Future) Done() <-chan struct{} {
 	return f.done
 }
 
-func (f *Future) Wait() (uint64, error) {
+func (f *Future) Wait() *FutureResult {
 	<-f.done
-	return f.lsn, f.err
+	return f.result
 }
 
-func (f *Future) WaitWithTimeout(timeout time.Duration) (uint64, error) {
+func (f *Future) WaitWithTimeout(timeout time.Duration) *FutureResult {
 	select {
 	case <-f.done:
-		return f.lsn, f.err
+		return f.result
 	case <-time.After(timeout):
-		return 0, ErrOperationTimeout
+		return &FutureResult{
+			lsn:   0,
+			count: 0,
+			err:   ErrOperationTimeout,
+		}
 	}
 }
 
-func (f *Future) LSN() uint64 {
-	return f.lsn
-}
-
-func (f *Future) Error() error {
-	return f.err
-}
-
-func (f *Future) complete(lsn uint64, err error) {
+func (f *Future) complete(result *FutureResult) {
 	f.once.Do(func() {
-		f.lsn = lsn
-		f.err = err
+		f.result = result
 		close(f.done)
 	})
 }

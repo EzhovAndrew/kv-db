@@ -48,16 +48,8 @@ func (m *MockEngine) Delete(ctx context.Context, key string) error {
 	return args.Error(0)
 }
 
-func (m *MockEngine) EnableLSNOrdering() {
+func (m *MockEngine) Shutdown() {
 	m.Called()
-}
-
-func (m *MockEngine) DisableLSNOrdering() {
-	m.Called()
-}
-
-func (m *MockEngine) SetCurrentAppliedLSN(lsn uint64) {
-	m.Called(lsn)
 }
 
 type MockWAL struct {
@@ -135,18 +127,6 @@ func (f *MockFuture) Error() error {
 	return f.err
 }
 
-// Helper function to create a mock future
-func createMockFuture(lsn uint64, err error) *MockFuture {
-	future := &MockFuture{
-		lsn:  lsn,
-		err:  err,
-		done: make(chan struct{}),
-	}
-	// Complete the future immediately
-	close(future.done)
-	return future
-}
-
 // Test NewStorage functionality
 func TestNewStorage_Success(t *testing.T) {
 	cfg := &configuration.Config{
@@ -222,10 +202,6 @@ func TestStorage_RecoveryFailure(t *testing.T) {
 		yield(nil, recoveryError)
 	}))
 
-	// Mock the engine methods called during recovery
-	mockEngine.On("DisableLSNOrdering").Return()
-	mockEngine.On("EnableLSNOrdering").Return()
-
 	// Create storage with mocked components
 	storage := &Storage{
 		engine: mockEngine,
@@ -275,8 +251,8 @@ func TestNewStorage_FullRecoveryFailure(t *testing.T) {
 	// Create a WAL first, write some data, then corrupt it
 	walEngine := wal.NewWAL(cfg.WAL)
 	future := walEngine.Set("test", "value")
-	_, err = future.Wait()
-	require.NoError(t, err)
+	result := future.Wait()
+	require.NoError(t, result.Error())
 	walEngine.Shutdown()
 
 	// Now create a corrupted log file to simulate recovery failure
@@ -454,15 +430,18 @@ func TestStorage_Shutdown_WithoutWAL(t *testing.T) {
 }
 
 func TestStorage_Shutdown_WithWAL(t *testing.T) {
+	mockEngine := new(MockEngine)
 	mockWAL := new(MockWAL)
 	storage := &Storage{
-		engine: new(MockEngine),
+		engine: mockEngine,
 		wal:    mockWAL,
 	}
 
 	mockWAL.On("Shutdown").Return()
+	mockEngine.On("Shutdown").Return()
 
 	storage.Shutdown()
+	mockEngine.AssertExpectations(t)
 	mockWAL.AssertExpectations(t)
 }
 
@@ -488,13 +467,10 @@ func TestStorage_ApplyLogs_Success(t *testing.T) {
 		},
 	}
 
-	mockEngine.On("DisableLSNOrdering").Return()
-	mockEngine.On("EnableLSNOrdering").Return()
 	mockWAL.On("WriteLogs", logs).Return(nil)
 	// Use more flexible context matching
 	mockEngine.On("Set", mock.AnythingOfType("*context.valueCtx"), "key1", "value1").Return(nil)
 	mockEngine.On("Delete", mock.AnythingOfType("*context.valueCtx"), "key2").Return(nil)
-	mockEngine.On("SetCurrentAppliedLSN", uint64(101)).Return()
 
 	err := storage.ApplyLogs(logs)
 	assert.NoError(t, err)
@@ -551,8 +527,6 @@ func TestStorage_ApplyLogs_WALWriteError(t *testing.T) {
 	}
 
 	walErr := errors.New("WAL write error")
-	mockEngine.On("DisableLSNOrdering").Return()
-	mockEngine.On("EnableLSNOrdering").Return()
 	mockWAL.On("WriteLogs", logs).Return(walErr)
 
 	err := storage.ApplyLogs(logs)
@@ -579,8 +553,6 @@ func TestStorage_ApplyLogs_NilLogEntry(t *testing.T) {
 		nil, // Nil entry
 	}
 
-	mockEngine.On("DisableLSNOrdering").Return()
-	mockEngine.On("EnableLSNOrdering").Return()
 	mockWAL.On("WriteLogs", logs).Return(nil)
 	mockEngine.On("Set", mock.AnythingOfType("*context.valueCtx"), "key1", "value1").Return(nil)
 
@@ -614,21 +586,6 @@ func TestStorage_GetLastLSN_WithoutWAL(t *testing.T) {
 
 	result := storage.GetLastLSN()
 	assert.Equal(t, uint64(0), result)
-}
-
-// Test ReadLogsFromLSN functionality
-func TestStorage_ReadLogsFromLSN_WithWAL_Structure(t *testing.T) {
-	mockWAL := new(MockWAL)
-	storage := &Storage{
-		engine: new(MockEngine),
-		wal:    mockWAL,
-	}
-
-	// Test structure - verify storage has WAL
-	assert.NotNil(t, storage.wal)
-
-	// In practice, this would require complex iter.Seq2 mocking
-	// For now, we verify the basic structure is correct
 }
 
 func TestStorage_ReadLogsFromLSN_WithoutWAL(t *testing.T) {

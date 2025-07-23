@@ -102,7 +102,7 @@ func (c *TCPClient) StartPushMode(ctx context.Context, handler MessageHandler) e
 }
 
 func (c *TCPClient) StopPushMode() {
-	concurrency.WithLock(&c.pushMutex, func() error {
+	concurrency.WithLock(&c.pushMutex, func() error { // nolint:errcheck
 		c.stopExistingPushMode()
 		return nil
 	})
@@ -110,7 +110,7 @@ func (c *TCPClient) StopPushMode() {
 
 func (c *TCPClient) IsPushMode() bool {
 	var result bool
-	concurrency.WithLock(c.pushMutex.RLocker(), func() error {
+	concurrency.WithLock(c.pushMutex.RLocker(), func() error { // nolint:errcheck
 		result = c.isPushMode
 		return nil
 	})
