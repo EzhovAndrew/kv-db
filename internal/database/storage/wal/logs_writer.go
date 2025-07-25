@@ -4,9 +4,10 @@ import (
 	"bytes"
 	"errors"
 
+	"go.uber.org/zap"
+
 	"github.com/EzhovAndrew/kv-db/internal/database/storage/encoders"
 	"github.com/EzhovAndrew/kv-db/internal/logging"
-	"go.uber.org/zap"
 )
 
 type FileSystemWriteSyncer interface {

@@ -7,10 +7,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EzhovAndrew/kv-db/internal/configuration"
-	"github.com/EzhovAndrew/kv-db/internal/logging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/EzhovAndrew/kv-db/internal/configuration"
+	"github.com/EzhovAndrew/kv-db/internal/logging"
 )
 
 func TestMain(m *testing.M) {
@@ -49,12 +50,12 @@ func TestNewSegmentedFileSystem_WithExistingMetadata(t *testing.T) {
 	// Create existing segment file using generateFileName
 	segmentFilename := generateFileName()
 	segmentPath := filepath.Join(tempDir, segmentFilename)
-	err := os.WriteFile(segmentPath, []byte("existing content"), 0644)
+	err := os.WriteFile(segmentPath, []byte("existing content"), 0o644)
 	require.NoError(t, err)
 
 	// Write metadata file
 	metadataFile := filepath.Join(tempDir, "metadata.txt")
-	err = os.WriteFile(metadataFile, []byte(segmentFilename+",100\n"), 0644)
+	err = os.WriteFile(metadataFile, []byte(segmentFilename+",100\n"), 0o644)
 	require.NoError(t, err)
 
 	fs := NewSegmentedFileSystem(tempDir, 1024)
@@ -77,12 +78,12 @@ func TestNewSegmentedFileSystem_WithLargeExistingSegment(t *testing.T) {
 	segmentFilename := generateFileName()
 	segmentPath := filepath.Join(tempDir, segmentFilename)
 	largeContent := make([]byte, 200) // Will exceed maxSegmentSize of 100
-	err := os.WriteFile(segmentPath, largeContent, 0644)
+	err := os.WriteFile(segmentPath, largeContent, 0o644)
 	require.NoError(t, err)
 
 	// Write metadata file
 	metadataFile := filepath.Join(tempDir, "metadata.txt")
-	err = os.WriteFile(metadataFile, []byte(segmentFilename+",100\n"), 0644)
+	err = os.WriteFile(metadataFile, []byte(segmentFilename+",100\n"), 0o644)
 	require.NoError(t, err)
 
 	time.Sleep(1 * time.Millisecond)

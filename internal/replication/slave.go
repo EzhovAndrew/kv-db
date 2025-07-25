@@ -8,11 +8,12 @@ import (
 	"net"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/EzhovAndrew/kv-db/internal/configuration"
 	"github.com/EzhovAndrew/kv-db/internal/database/storage/wal"
 	"github.com/EzhovAndrew/kv-db/internal/logging"
 	"github.com/EzhovAndrew/kv-db/internal/network"
-	"go.uber.org/zap"
 )
 
 // Slave replication constants
@@ -134,7 +135,6 @@ func (rm *ReplicationManager) attemptConnection(ctx context.Context, client *net
 
 // handleMasterMessage processes incoming log messages from master
 func (rm *ReplicationManager) handleMasterMessage(ctx context.Context, message []byte) []byte {
-	// Parse JSON log batch
 	var batch LogBatch
 	if err := json.Unmarshal(message, &batch); err != nil {
 		logging.Error("Failed to parse log batch from master",
@@ -143,7 +143,6 @@ func (rm *ReplicationManager) handleMasterMessage(ctx context.Context, message [
 		return rm.createErrorResponse(ErrInvalidJSONFormat.Error())
 	}
 
-	// Validate batch
 	if err := rm.validateLogBatch(&batch); err != nil {
 		logging.Error("Invalid log batch received",
 			zap.Error(err),
@@ -187,13 +186,11 @@ func (rm *ReplicationManager) validateLogBatch(batch *LogBatch) error {
 		return ErrEventCountExceedsTotal
 	}
 
-	// Validate each event
 	for i, event := range batch.Events {
 		if len(event.Args) == 0 {
 			return fmt.Errorf("%w %d", ErrEmptyArgsInEvent, i)
 		}
 
-		// Validate command ID (assuming valid range)
 		if event.CmdID < 0 {
 			return fmt.Errorf("%w %d: %d", ErrInvalidCommandID, i, event.CmdID)
 		}
@@ -267,14 +264,10 @@ func (rm *ReplicationManager) sendLastLSNToMaster(ctx context.Context, client *n
 
 // createLSNSyncMessage creates the LSN sync message to send to master
 func (rm *ReplicationManager) createLSNSyncMessage(lastLSN uint64) ([]byte, error) {
-	lsnMessage := map[string]any{
-		"type":     "lsn_sync",
-		"last_lsn": lastLSN,
-	}
-
-	// Include slave ID if configured
-	if rm.cfg.Replication.SlaveID != "" {
-		lsnMessage["slave_id"] = rm.cfg.Replication.SlaveID
+	lsnMessage := LSNSyncMessage{
+		Type:    "lsn_sync",
+		LastLSN: &lastLSN,
+		SlaveID: rm.cfg.Replication.SlaveID,
 	}
 
 	return json.Marshal(lsnMessage)
@@ -282,8 +275,7 @@ func (rm *ReplicationManager) createLSNSyncMessage(lastLSN uint64) ([]byte, erro
 
 // handleMasterResponse processes the response from master after LSN sync
 func (rm *ReplicationManager) handleMasterResponse(response []byte) error {
-	// Check if response is JSON (containing assigned slave ID)
-	var responseData map[string]any
+	var responseData LSNSyncResponse
 	if err := json.Unmarshal(response, &responseData); err == nil {
 		return rm.processJSONResponse(responseData)
 	}
@@ -293,17 +285,17 @@ func (rm *ReplicationManager) handleMasterResponse(response []byte) error {
 }
 
 // processJSONResponse handles JSON response from master
-func (rm *ReplicationManager) processJSONResponse(responseData map[string]any) error {
+func (rm *ReplicationManager) processJSONResponse(responseData LSNSyncResponse) error {
 	// Master sent JSON response with slave ID
-	if assignedID, ok := responseData["slave_id"].(string); ok && rm.cfg.Replication.SlaveID == "" {
-		rm.cfg.Replication.SlaveID = assignedID
+	if responseData.SlaveID != "" && rm.cfg.Replication.SlaveID == "" {
+		rm.cfg.Replication.SlaveID = responseData.SlaveID
 		logging.Info("Master assigned slave ID",
-			zap.String("slave_id", assignedID))
+			zap.String("slave_id", responseData.SlaveID))
 		// TODO: In production, persist this ID to config file
 	}
 
-	if status, ok := responseData["status"].(string); ok && status != "OK" {
-		return fmt.Errorf("%w: %s", ErrMasterRejectedLSNSync, status)
+	if responseData.Status != "" && responseData.Status != "OK" {
+		return fmt.Errorf("%w: %s", ErrMasterRejectedLSNSync, responseData.Status)
 	}
 
 	return nil

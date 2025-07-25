@@ -7,12 +7,13 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/EzhovAndrew/kv-db/internal/configuration"
 	"github.com/EzhovAndrew/kv-db/internal/database/compute"
 	"github.com/EzhovAndrew/kv-db/internal/database/storage/encoders"
 	"github.com/EzhovAndrew/kv-db/internal/database/storage/filesystem"
 	"github.com/EzhovAndrew/kv-db/internal/logging"
-	"go.uber.org/zap"
 )
 
 type LogEntry = encoders.Log

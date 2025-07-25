@@ -8,10 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EzhovAndrew/kv-db/internal/configuration"
-	"github.com/EzhovAndrew/kv-db/internal/database/compute"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/EzhovAndrew/kv-db/internal/configuration"
+	"github.com/EzhovAndrew/kv-db/internal/database/compute"
 )
 
 func TestNewWAL(t *testing.T) {
@@ -185,7 +186,6 @@ func TestWAL_BatchFlushing(t *testing.T) {
 
 	writtenLogs := mockWriter.getWrittenLogs()
 	assert.Equal(t, 3, len(writtenLogs))
-
 }
 
 func TestWAL_TimeoutFlushing(t *testing.T) {

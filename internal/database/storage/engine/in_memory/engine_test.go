@@ -8,10 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EzhovAndrew/kv-db/internal/concurrency"
-	"github.com/EzhovAndrew/kv-db/internal/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/EzhovAndrew/kv-db/internal/concurrency"
+	"github.com/EzhovAndrew/kv-db/internal/utils"
 )
 
 var testLSN uint64 = 1

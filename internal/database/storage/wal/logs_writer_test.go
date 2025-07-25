@@ -6,10 +6,11 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/EzhovAndrew/kv-db/internal/database/compute"
-	"github.com/EzhovAndrew/kv-db/internal/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/EzhovAndrew/kv-db/internal/database/compute"
+	"github.com/EzhovAndrew/kv-db/internal/utils"
 )
 
 func TestNewFileLogsWriter(t *testing.T) {

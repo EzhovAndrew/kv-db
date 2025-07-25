@@ -9,10 +9,11 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/EzhovAndrew/kv-db/internal/concurrency"
 	"github.com/EzhovAndrew/kv-db/internal/configuration"
 	"github.com/EzhovAndrew/kv-db/internal/logging"
-	"go.uber.org/zap"
 )
 
 var (

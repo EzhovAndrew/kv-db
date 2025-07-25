@@ -5,13 +5,14 @@ import (
 	"errors"
 	"iter"
 
+	"go.uber.org/zap"
+
 	"github.com/EzhovAndrew/kv-db/internal/configuration"
 	"github.com/EzhovAndrew/kv-db/internal/database/compute"
 	"github.com/EzhovAndrew/kv-db/internal/database/storage/engine/in_memory"
 	"github.com/EzhovAndrew/kv-db/internal/database/storage/wal"
 	"github.com/EzhovAndrew/kv-db/internal/logging"
 	"github.com/EzhovAndrew/kv-db/internal/utils"
-	"go.uber.org/zap"
 )
 
 var (
@@ -255,7 +256,11 @@ func (s *Storage) recover() error {
 		return nil
 	}
 
-	var lastAppliedLSN uint64
+	// Set last applied LSN to max uint64
+	// for replication purposes because after incrementing it will be 0
+	// and we will correctly distinguish between real applied log with lsn 0
+	// and current 0 that means that we have not applied any logs yet
+	lastAppliedLSN := ^uint64(0)
 	for log, err := range s.wal.Recover() {
 		if err != nil {
 			return errors.Join(ErrLogReadFailed, err)

@@ -10,9 +10,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/EzhovAndrew/kv-db/internal/database/storage/encoders"
 	"github.com/EzhovAndrew/kv-db/internal/logging"
-	"go.uber.org/zap"
 )
 
 type MetadataManager interface {
@@ -32,7 +33,7 @@ type SegmentedFileSystem struct {
 }
 
 func createDir(dataDir string) error {
-	return os.MkdirAll(dataDir, 0755)
+	return os.MkdirAll(dataDir, 0o755)
 }
 
 func NewSegmentedFileSystem(dataDir string, maxSegmentSize int) *SegmentedFileSystem {

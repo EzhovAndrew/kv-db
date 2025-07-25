@@ -22,6 +22,17 @@ type LogBatch struct {
 	Events []LogEvent `json:"events"`
 }
 
+type LSNSyncMessage struct {
+	Type    string  `json:"type"`
+	LastLSN *uint64 `json:"last_lsn"`
+	SlaveID string  `json:"slave_id,omitempty"`
+}
+
+type LSNSyncResponse struct {
+	Status  string `json:"status"`
+	SlaveID string `json:"slave_id,omitempty"`
+}
+
 type StorageApplier interface {
 	ApplyLogs(logs []*wal.LogEntry) error
 	GetLastLSN() uint64

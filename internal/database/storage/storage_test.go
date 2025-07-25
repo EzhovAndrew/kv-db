@@ -8,13 +8,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+
 	"github.com/EzhovAndrew/kv-db/internal/configuration"
 	"github.com/EzhovAndrew/kv-db/internal/database/compute"
 	"github.com/EzhovAndrew/kv-db/internal/database/storage/wal"
 	"github.com/EzhovAndrew/kv-db/internal/logging"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
-	"github.com/stretchr/testify/require"
 )
 
 func TestMain(m *testing.M) {
@@ -147,7 +148,7 @@ func TestNewStorage_WithWAL(t *testing.T) {
 	testDir := "/tmp/test-wal"
 
 	// Create test directory
-	err := os.MkdirAll(testDir, 0755)
+	err := os.MkdirAll(testDir, 0o755)
 	require.NoError(t, err)
 
 	// Cleanup after test
@@ -228,7 +229,7 @@ func TestNewStorage_FullRecoveryFailure(t *testing.T) {
 	testDir := "/tmp/test-recovery-failure"
 
 	// Create test directory
-	err := os.MkdirAll(testDir, 0755)
+	err := os.MkdirAll(testDir, 0o755)
 	require.NoError(t, err)
 
 	// Cleanup after test

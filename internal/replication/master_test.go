@@ -9,11 +9,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/EzhovAndrew/kv-db/internal/configuration"
 	"github.com/EzhovAndrew/kv-db/internal/database/storage/wal"
 	"github.com/EzhovAndrew/kv-db/internal/logging"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // Mock implementations for testing
@@ -93,10 +94,11 @@ func createTestWALLogEntry(lsn uint64, command int, args []string) *wal.LogEntry
 func TestParseSlaveHandshake_ValidWithSlaveID(t *testing.T) {
 	rm := createTestReplicationManager()
 
-	handshake := map[string]any{
-		"type":     "lsn_sync",
-		"last_lsn": float64(100),
-		"slave_id": "test-slave-123",
+	lastLSN := uint64(100)
+	handshake := LSNSyncMessage{
+		Type:    "lsn_sync",
+		LastLSN: &lastLSN,
+		SlaveID: "test-slave-123",
 	}
 	data, _ := json.Marshal(handshake)
 
@@ -110,9 +112,10 @@ func TestParseSlaveHandshake_ValidWithSlaveID(t *testing.T) {
 func TestParseSlaveHandshake_ValidWithoutSlaveID(t *testing.T) {
 	rm := createTestReplicationManager()
 
-	handshake := map[string]any{
-		"type":     "lsn_sync",
-		"last_lsn": float64(200),
+	lastLSN := uint64(200)
+	handshake := LSNSyncMessage{
+		Type:    "lsn_sync",
+		LastLSN: &lastLSN,
 	}
 	data, _ := json.Marshal(handshake)
 
@@ -138,9 +141,10 @@ func TestParseSlaveHandshake_InvalidJSON(t *testing.T) {
 func TestParseSlaveHandshake_WrongMessageType(t *testing.T) {
 	rm := createTestReplicationManager()
 
-	handshake := map[string]any{
-		"type":     "wrong_type",
-		"last_lsn": float64(100),
+	lastLSN := uint64(100)
+	handshake := LSNSyncMessage{
+		Type:    "wrong_type",
+		LastLSN: &lastLSN,
 	}
 	data, _ := json.Marshal(handshake)
 
@@ -153,27 +157,21 @@ func TestParseSlaveHandshake_WrongMessageType(t *testing.T) {
 func TestParseSlaveHandshake_InvalidLastLSNType(t *testing.T) {
 	rm := createTestReplicationManager()
 
-	handshake := map[string]any{
-		"type":     "lsn_sync",
-		"last_lsn": "not-a-number",
-	}
-	data, _ := json.Marshal(handshake)
+	invalidData := []byte(`{"type": "lsn_sync", "last_lsn": "not-a-number"}`)
 
-	slave, err := rm.parseSlaveHandshake(data)
+	slave, err := rm.parseSlaveHandshake(invalidData)
 
 	assert.Nil(t, slave)
-	assert.ErrorIs(t, err, ErrInvalidLastLSN)
+	assert.ErrorIs(t, err, ErrInvalidLSNSyncMsg)
 }
 
 func TestParseSlaveHandshake_MissingLastLSN(t *testing.T) {
 	rm := createTestReplicationManager()
 
-	handshake := map[string]any{
-		"type": "lsn_sync",
-	}
-	data, _ := json.Marshal(handshake)
+	// Test with missing last_lsn field
+	invalidData := []byte(`{"type": "lsn_sync"}`)
 
-	slave, err := rm.parseSlaveHandshake(data)
+	slave, err := rm.parseSlaveHandshake(invalidData)
 
 	assert.Nil(t, slave)
 	assert.ErrorIs(t, err, ErrInvalidLastLSN)
@@ -184,11 +182,7 @@ func TestParseSlaveHandshake_MissingLastLSN(t *testing.T) {
 func TestExtractOrGenerateSlaveID_ExistingID(t *testing.T) {
 	rm := createTestReplicationManager()
 
-	lsnSync := map[string]any{
-		"slave_id": "existing-slave-id",
-	}
-
-	id := rm.extractOrGenerateSlaveID(lsnSync, 100)
+	id := rm.extractOrGenerateSlaveID("existing-slave-id", 100)
 
 	assert.Equal(t, "existing-slave-id", id)
 }
@@ -196,11 +190,7 @@ func TestExtractOrGenerateSlaveID_ExistingID(t *testing.T) {
 func TestExtractOrGenerateSlaveID_EmptyID(t *testing.T) {
 	rm := createTestReplicationManager()
 
-	lsnSync := map[string]any{
-		"slave_id": "",
-	}
-
-	id := rm.extractOrGenerateSlaveID(lsnSync, 150)
+	id := rm.extractOrGenerateSlaveID("", 150)
 
 	assert.Contains(t, id, "slave-")
 	assert.Contains(t, id, "-150")
@@ -209,9 +199,7 @@ func TestExtractOrGenerateSlaveID_EmptyID(t *testing.T) {
 func TestExtractOrGenerateSlaveID_MissingID(t *testing.T) {
 	rm := createTestReplicationManager()
 
-	lsnSync := map[string]any{}
-
-	id := rm.extractOrGenerateSlaveID(lsnSync, 200)
+	id := rm.extractOrGenerateSlaveID("", 200)
 
 	assert.Contains(t, id, "slave-")
 	assert.Contains(t, id, "-200")

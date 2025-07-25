@@ -1,9 +1,10 @@
 package logging
 
 import (
-	"github.com/EzhovAndrew/kv-db/internal/configuration"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+
+	"github.com/EzhovAndrew/kv-db/internal/configuration"
 )
 
 var globalLogger *zap.Logger

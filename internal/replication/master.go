@@ -10,12 +10,13 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/EzhovAndrew/kv-db/internal/concurrency"
 	"github.com/EzhovAndrew/kv-db/internal/configuration"
 	"github.com/EzhovAndrew/kv-db/internal/database/storage/wal"
 	"github.com/EzhovAndrew/kv-db/internal/logging"
 	"github.com/EzhovAndrew/kv-db/internal/network"
-	"go.uber.org/zap"
 )
 
 // Master replication constants
@@ -137,35 +138,34 @@ func (rm *ReplicationManager) handleSlaveConnection(
 
 // parseSlaveHandshake parses initial LSN sync message and creates SlaveConnection
 func (rm *ReplicationManager) parseSlaveHandshake(initialData []byte) (*SlaveConnection, error) {
-	var lsnSync map[string]any
+	var lsnSync LSNSyncMessage
 	if err := json.Unmarshal(initialData, &lsnSync); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidLSNSyncMsg, err)
 	}
 
 	// Validate LSN sync message
-	if lsnSync["type"] != "lsn_sync" {
+	if lsnSync.Type != "lsn_sync" {
 		return nil, ErrExpectedLSNSyncMsg
 	}
 
-	lastLSN, ok := lsnSync["last_lsn"].(float64) // JSON numbers are float64
-	if !ok {
+	if lsnSync.LastLSN == nil {
 		return nil, ErrInvalidLastLSN
 	}
 
-	slaveID := rm.extractOrGenerateSlaveID(lsnSync, uint64(lastLSN))
+	lastLSN := *lsnSync.LastLSN
+	slaveID := rm.extractOrGenerateSlaveID(lsnSync.SlaveID, lastLSN)
 
 	return &SlaveConnection{
 		ID:      slaveID,
-		LastLSN: uint64(lastLSN),
+		LastLSN: lastLSN,
 	}, nil
 }
 
 // extractOrGenerateSlaveID gets slave ID from message or generates new one
-func (rm *ReplicationManager) extractOrGenerateSlaveID(lsnSync map[string]any, lastLSN uint64) string {
-	if id, ok := lsnSync["slave_id"].(string); ok && id != "" {
-		return id
+func (rm *ReplicationManager) extractOrGenerateSlaveID(slaveID string, lastLSN uint64) string {
+	if slaveID != "" {
+		return slaveID
 	}
-	// Generate new slave ID
 	return fmt.Sprintf("slave-%d-%d", time.Now().Unix(), lastLSN)
 }
 
@@ -182,12 +182,12 @@ func (rm *ReplicationManager) sendHandshakeResponse(
 	yield func([]byte, error) bool,
 	slave *SlaveConnection,
 ) bool {
-	responseData := map[string]any{
-		"status":   "OK",
-		"slave_id": slave.ID,
+	response := LSNSyncResponse{
+		Status:  "OK",
+		SlaveID: slave.ID,
 	}
 
-	responseBytes, err := json.Marshal(responseData)
+	responseBytes, err := json.Marshal(response)
 	if err != nil {
 		logging.Error("Failed to marshal response", zap.Error(ErrMarshalResponseFailed))
 		return yield([]byte("OK"), nil) // Fallback to simple response
@@ -201,7 +201,7 @@ func (rm *ReplicationManager) streamLogsToSlave(
 	slave *SlaveConnection,
 	yield func([]byte, error) bool,
 ) {
-	startLSN := slave.LastLSN
+	startLSN := slave.LastLSN + 1
 
 	logging.Info("Starting log streaming for slave",
 		zap.String("slave_id", slave.ID),
@@ -299,7 +299,7 @@ func (rm *ReplicationManager) GetMinimumSlaveLSN() uint64 {
 		return ^uint64(0) // MaxUint64 - all logs can be compacted
 	}
 
-	var minLSN = ^uint64(0) // Start with MaxUint64
+	minLSN := ^uint64(0) // Start with MaxUint64
 	hasSlaves := false
 
 	concurrency.WithLock(&rm.masterState.mu, func() error { // nolint:errcheck

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"hash/fnv"
+	"runtime"
 	"sync"
 
 	"github.com/EzhovAndrew/kv-db/internal/concurrency"
@@ -17,7 +18,7 @@ var (
 	ErrEngineShuttingDown = errors.New("engine is shutting down")
 )
 
-const NumShards = 16
+var NumShards = uint32(runtime.NumCPU())
 
 type shard struct {
 	data map[string]string
@@ -25,8 +26,8 @@ type shard struct {
 }
 
 type Engine struct {
-	shards  [NumShards]*shard
-	workers [NumShards]*Worker
+	shards  []*shard
+	workers []*Worker
 }
 
 // operationContext holds the LSN and count extracted from context
@@ -37,7 +38,10 @@ type operationContext struct {
 }
 
 func NewEngine() (*Engine, error) {
-	e := &Engine{}
+	e := &Engine{
+		shards:  make([]*shard, NumShards),
+		workers: make([]*Worker, NumShards),
+	}
 
 	for i := range NumShards {
 		e.shards[i] = &shard{
