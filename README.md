@@ -5,7 +5,7 @@
 ## ✨ Features
 
 ### 🚀 Core Functionality
-- **In-Memory Storage**: Fast key-value operations with concurrent access
+- **In-Memory Storage**: Fast key-value operations with sharded concurrent access based on runtime.NumCPU()
 - **TCP Protocol**: Simple text-based commands over TCP for easy integration
 - **Interactive Client**: Feature-rich CLI client with autocomplete and command history
 
@@ -53,8 +53,10 @@
         │  │   Engine    │    │       WAL       │   │
         │  │             │    │                 │   │
         │  │ • In-Memory │    │ • Batching      │   │
-        │  │ • Hash Map  │    │ • Persistence   │   │
-        │  │ • Locking   │    │ • Recovery      │   │
+        │  │ • Sharded   │    │ • Persistence   │   │
+        │  │   Hash Map  │    │ • Recovery      │   │
+        │  │ • Per shard │    │                 │   │
+        │  │   locking   │    │                 │   │ 
         │  └─────────────┘    └─────────────────┘   │
         └───────────────────────────────────────────┘
                               │
@@ -281,7 +283,7 @@ kv-db/
 ### Key Components
 
 - **Database**: Main database interface and request handling
-- **Storage Engine**: In-memory hash map with concurrent access
+- **Storage Engine**: In-memory sharded hash map with concurrent access, partitioned by runtime.NumCPU()
 - **WAL**: Write-ahead logging with batching and recovery
 - **Replication**: Master-slave logical asynchronous push replication 
 - **Network**: TCP protocol implementation
@@ -312,7 +314,8 @@ Your input helps me grow as a developer! 🚀
 ## 🎯 Roadmap
 
 - [ ] Integration tests
-- [ ] Sharded hash map in engine
+- [ ] SDK
+- [X] Sharded hash map in engine
 - [ ] WAL segments compaction
 - [ ] Query language extensions
 - [ ] Metrics and monitoring

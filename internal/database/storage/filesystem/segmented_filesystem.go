@@ -10,9 +10,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/EzhovAndrew/kv-db/internal/database/storage/encoders"
 	"github.com/EzhovAndrew/kv-db/internal/logging"
-	"go.uber.org/zap"
 )
 
 type MetadataManager interface {
@@ -32,7 +33,7 @@ type SegmentedFileSystem struct {
 }
 
 func createDir(dataDir string) error {
-	return os.MkdirAll(dataDir, 0755)
+	return os.MkdirAll(dataDir, 0o755)
 }
 
 func NewSegmentedFileSystem(dataDir string, maxSegmentSize int) *SegmentedFileSystem {
@@ -362,7 +363,7 @@ func (fs *SegmentedFileSystem) readCurrentSegmentIncremental(segmentName string,
 	if err != nil {
 		return nil, offset, fmt.Errorf("failed to open current segment %s: %w", segmentPath, err)
 	}
-	defer file.Close()
+	defer file.Close() // nolint:errcheck
 
 	data := make([]byte, readSize)
 	n, err := file.ReadAt(data, offset)
@@ -381,7 +382,7 @@ func (fs *SegmentedFileSystem) readCompleteSegmentFromOffset(segmentName string,
 	if err != nil {
 		return nil, fmt.Errorf("failed to open segment %s: %w", segmentPath, err)
 	}
-	defer file.Close()
+	defer file.Close() // nolint:errcheck
 
 	// Get file size
 	fileInfo, err := file.Stat()

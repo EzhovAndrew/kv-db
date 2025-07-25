@@ -8,10 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EzhovAndrew/kv-db/internal/configuration"
-	"github.com/EzhovAndrew/kv-db/internal/database/compute"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/EzhovAndrew/kv-db/internal/configuration"
+	"github.com/EzhovAndrew/kv-db/internal/database/compute"
 )
 
 func TestNewWAL(t *testing.T) {
@@ -82,7 +83,8 @@ func TestWAL_Set(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			future := wal.Set(tt.key, tt.value)
-			lsn, err := future.Wait()
+			result := future.Wait()
+			lsn, err := result.LSN(), result.Error()
 			assert.NoError(t, err)
 			assert.Equal(t, tt.expected, lsn)
 		})
@@ -138,7 +140,8 @@ func TestWAL_Delete(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			future := wal.Delete(tt.key)
-			lsn, err := future.Wait()
+			result := future.Wait()
+			lsn, err := result.LSN(), result.Error()
 			assert.NoError(t, err)
 			assert.Equal(t, tt.expected, lsn)
 		})
@@ -183,7 +186,6 @@ func TestWAL_BatchFlushing(t *testing.T) {
 
 	writtenLogs := mockWriter.getWrittenLogs()
 	assert.Equal(t, 3, len(writtenLogs))
-
 }
 
 func TestWAL_TimeoutFlushing(t *testing.T) {
@@ -287,7 +289,8 @@ func TestWAL_SetLastLSN(t *testing.T) {
 	wal.logsWriter = mockWriter
 
 	future := wal.Set("key", "value")
-	lsn, err := future.Wait()
+	result := future.Wait()
+	lsn, err := result.LSN(), result.Error()
 	assert.NoError(t, err)
 	assert.Equal(t, uint64(101), lsn)
 }
@@ -320,13 +323,15 @@ func TestWAL_ConcurrentOperations(t *testing.T) {
 			for j := range operationsPerGoroutine {
 				if j%2 == 0 {
 					future := wal.Set("key", "value")
-					lsn, err := future.Wait()
+					result := future.Wait()
+					lsn, err := result.LSN(), result.Error()
 					if err == nil {
 						lsnChan <- lsn
 					}
 				} else {
 					future := wal.Delete("key")
-					lsn, err := future.Wait()
+					result := future.Wait()
+					lsn, err := result.LSN(), result.Error()
 					if err == nil {
 						lsnChan <- lsn
 					}
@@ -458,7 +463,8 @@ func TestWAL_SetLastLSNToZero(t *testing.T) {
 
 	// Next operation should have LSN 1
 	future := wal.Set("key", "value")
-	lsn, err := future.Wait()
+	result := future.Wait()
+	lsn, err := result.LSN(), result.Error()
 	assert.NoError(t, err)
 	assert.Equal(t, uint64(1), lsn)
 }
@@ -497,7 +503,8 @@ func TestWAL_LargeArgumentsInLogs(t *testing.T) {
 	largeValue := string(make([]byte, 1000))
 
 	future := wal.Set(largeKey, largeValue)
-	lsn, err := future.Wait()
+	result := future.Wait()
+	lsn, err := result.LSN(), result.Error()
 	assert.NoError(t, err)
 	assert.Equal(t, uint64(1), lsn)
 
@@ -532,25 +539,25 @@ func TestWAL_MixedOperations(t *testing.T) {
 	future5 := wal.Set("key5", "value5") // Should trigger flush
 
 	// Wait for all operations and verify LSN sequence
-	lsn1, err1 := future1.Wait()
-	assert.NoError(t, err1)
-	assert.Equal(t, uint64(1), lsn1)
+	result1 := future1.Wait()
+	assert.NoError(t, result1.Error())
+	assert.Equal(t, uint64(1), result1.LSN())
 
-	lsn2, err2 := future2.Wait()
-	assert.NoError(t, err2)
-	assert.Equal(t, uint64(2), lsn2)
+	result2 := future2.Wait()
+	assert.NoError(t, result2.Error())
+	assert.Equal(t, uint64(2), result2.LSN())
 
-	lsn3, err3 := future3.Wait()
-	assert.NoError(t, err3)
-	assert.Equal(t, uint64(3), lsn3)
+	result3 := future3.Wait()
+	assert.NoError(t, result3.Error())
+	assert.Equal(t, uint64(3), result3.LSN())
 
-	lsn4, err4 := future4.Wait()
-	assert.NoError(t, err4)
-	assert.Equal(t, uint64(4), lsn4)
+	result4 := future4.Wait()
+	assert.NoError(t, result4.Error())
+	assert.Equal(t, uint64(4), result4.LSN())
 
-	lsn5, err5 := future5.Wait()
-	assert.NoError(t, err5)
-	assert.Equal(t, uint64(5), lsn5)
+	result5 := future5.Wait()
+	assert.NoError(t, result5.Error())
+	assert.Equal(t, uint64(5), result5.LSN())
 
 	// Allow time for processing
 	time.Sleep(50 * time.Millisecond)
@@ -591,7 +598,8 @@ func TestWAL_FlushErrorHandling(t *testing.T) {
 
 	go func() {
 		future := wal.Set("key1", "value1")
-		lsn, err := future.Wait()
+		result := future.Wait()
+		lsn, err := result.LSN(), result.Error()
 		assert.Error(t, err) // Should get error on failure
 		assert.Equal(t, uint64(0), lsn)
 		done <- true
@@ -599,7 +607,8 @@ func TestWAL_FlushErrorHandling(t *testing.T) {
 
 	go func() {
 		future := wal.Set("key2", "value2") // This will trigger flush
-		lsn, err := future.Wait()
+		result := future.Wait()
+		lsn, err := result.LSN(), result.Error()
 		assert.Error(t, err) // Should get error on failure
 		assert.Equal(t, uint64(0), lsn)
 		done <- true
@@ -663,17 +672,17 @@ func TestWAL_OperationsDuringShutdown(t *testing.T) {
 
 	go func() {
 		future := wal.Set("key1", "value1")
-		_, err := future.Wait()
+		result := future.Wait()
 		// Should be flushed during shutdown
-		assert.NoError(t, err)
+		assert.NoError(t, result.Error())
 		done <- true
 	}()
 
 	go func() {
 		future := wal.Delete("key2")
-		_, err := future.Wait()
+		result := future.Wait()
 		// Should be flushed during shutdown
-		assert.NoError(t, err)
+		assert.NoError(t, result.Error())
 		done <- true
 	}()
 
@@ -695,14 +704,15 @@ func TestWAL_OperationsDuringShutdown(t *testing.T) {
 
 	// After shutdown, Set and Delete should return error immediately
 	future := wal.Set("key3", "value3")
-	lsn, err := future.Wait()
+	result := future.Wait()
+	lsn, err := result.LSN(), result.Error()
 	assert.Error(t, err, ErrWALShuttingDown)
 	assert.Zero(t, lsn, "LSN should be zero on error")
 
 	future = wal.Delete("key4")
-	lsn, err = future.Wait()
-	assert.Error(t, err, ErrWALShuttingDown)
-	assert.Zero(t, lsn, "LSN should be zero on error")
+	result = future.Wait()
+	assert.Error(t, result.Error(), ErrWALShuttingDown)
+	assert.Zero(t, result.LSN(), "LSN should be zero on error")
 }
 
 func TestWAL_WriteLogsUsesNormalBatching(t *testing.T) {
@@ -770,12 +780,12 @@ func TestWAL_WriteLogsAndSetDelAreBatchedTogether(t *testing.T) {
 	f3 := wal.Delete("k5")
 
 	// Wait for all futures to complete (should only complete after batch flush)
-	_, err1 := f1.Wait()
-	_, err2 := f2.Wait()
-	_, err3 := f3.Wait()
-	assert.NoError(t, err1)
-	assert.NoError(t, err2)
-	assert.NoError(t, err3)
+	result1 := f1.Wait()
+	result2 := f2.Wait()
+	result3 := f3.Wait()
+	assert.NoError(t, result1.Error())
+	assert.NoError(t, result2.Error())
+	assert.NoError(t, result3.Error())
 
 	// Allow time for processing
 	time.Sleep(100 * time.Millisecond)
@@ -795,6 +805,297 @@ func TestWAL_WriteLogsAndSetDelAreBatchedTogether(t *testing.T) {
 	assert.Equal(t, "k4", writtenLogs[3].Arguments[0])
 	assert.Equal(t, compute.DelCommandID, writtenLogs[4].Command)
 	assert.Equal(t, "k5", writtenLogs[4].Arguments[0])
+}
+
+func TestWAL_Counter_SameKeyGetsTotalCount(t *testing.T) {
+	tempDir := t.TempDir()
+
+	config := &configuration.WALConfig{
+		DataDirectory:     tempDir,
+		MaxSegmentSize:    1024 * 1024,
+		FlushBatchSize:    5,
+		FlushBatchTimeout: 100000,
+	}
+
+	wal := NewWAL(config)
+	defer wal.Shutdown()
+
+	// Use mock writer to control when flush happens
+	mockWriter := &mockLogsWriter{}
+	wal.logsWriter = mockWriter
+
+	// Same key multiple times in one batch
+	future1 := wal.Set("same_key", "value1")
+	future2 := wal.Set("same_key", "value2")
+	future3 := wal.Set("same_key", "value3")
+	future4 := wal.Delete("same_key")
+
+	// Different key
+	future5 := wal.Set("other_key", "value5")
+
+	// Get results (now they should all be in the same batch)
+	result1 := future1.Wait()
+	result2 := future2.Wait()
+	result3 := future3.Wait()
+	result4 := future4.Wait()
+	result5 := future5.Wait()
+
+	// Verify no errors
+	assert.NoError(t, result1.Error())
+	assert.NoError(t, result2.Error())
+	assert.NoError(t, result3.Error())
+	assert.NoError(t, result4.Error())
+	assert.NoError(t, result5.Error())
+
+	// All same_key operations should have count=4 (total same_key operations)
+	assert.Equal(t, 4, result1.Count(), "All same_key operations should have count=4")
+	assert.Equal(t, 4, result2.Count(), "All same_key operations should have count=4")
+	assert.Equal(t, 4, result3.Count(), "All same_key operations should have count=4")
+	assert.Equal(t, 4, result4.Count(), "All same_key operations should have count=4")
+
+	// other_key operation should have count=1
+	assert.Equal(t, 1, result5.Count(), "other_key operation should have count=1")
+
+	// Verify LSNs are sequential
+	assert.Equal(t, uint64(1), result1.LSN())
+	assert.Equal(t, uint64(2), result2.LSN())
+	assert.Equal(t, uint64(3), result3.LSN())
+	assert.Equal(t, uint64(4), result4.LSN())
+	assert.Equal(t, uint64(5), result5.LSN())
+}
+
+func TestWAL_Counter_CounterResetsBetweenBatches(t *testing.T) {
+	tempDir := t.TempDir()
+
+	config := &configuration.WALConfig{
+		DataDirectory:     tempDir,
+		MaxSegmentSize:    1024 * 1024,
+		FlushBatchSize:    3,
+		FlushBatchTimeout: 100000,
+	}
+
+	wal := NewWAL(config)
+	defer wal.Shutdown()
+
+	// Use mock writer to control when flush happens
+	mockWriter := &mockLogsWriter{}
+	wal.logsWriter = mockWriter
+
+	// First batch: 2 operations on same key + 1 filler to trigger flush
+	future1 := wal.Set("test_key", "value1")
+	future2 := wal.Set("test_key", "value2")
+	fillerFuture1 := wal.Set("filler1", "filler_value") // Should trigger flush
+
+	result1 := future1.Wait()
+	result2 := future2.Wait()
+	fillerResult1 := fillerFuture1.Wait()
+
+	// Both test_key operations should have count=2 (total test_key in first batch)
+	assert.NoError(t, result1.Error())
+	assert.NoError(t, result2.Error())
+	assert.NoError(t, fillerResult1.Error())
+	assert.Equal(t, 2, result1.Count(), "First batch: test_key operations should have count=2")
+	assert.Equal(t, 2, result2.Count(), "First batch: test_key operations should have count=2")
+	assert.Equal(t, 1, fillerResult1.Count(), "First batch: filler operation should have count=1")
+
+	// Second batch: 3 operations on same key (exactly fills batch)
+	future3 := wal.Set("test_key", "value3")
+	future4 := wal.Set("test_key", "value4")
+	future5 := wal.Set("test_key", "value5") // Should trigger flush
+
+	result3 := future3.Wait()
+	result4 := future4.Wait()
+	result5 := future5.Wait()
+
+	// All should have count=3 (total test_key in second batch, counter was reset)
+	assert.NoError(t, result3.Error())
+	assert.NoError(t, result4.Error())
+	assert.NoError(t, result5.Error())
+	assert.Equal(t, 3, result3.Count(), "Second batch: all test_key operations should have count=3")
+	assert.Equal(t, 3, result4.Count(), "Second batch: all test_key operations should have count=3")
+	assert.Equal(t, 3, result5.Count(), "Second batch: all test_key operations should have count=3")
+}
+
+func TestWAL_Counter_MultipleKeysInSameBatch(t *testing.T) {
+	tempDir := t.TempDir()
+
+	config := &configuration.WALConfig{
+		DataDirectory:     tempDir,
+		MaxSegmentSize:    1024 * 1024,
+		FlushBatchSize:    6,
+		FlushBatchTimeout: 100000,
+	}
+
+	wal := NewWAL(config)
+	defer wal.Shutdown()
+
+	// Use mock writer to control when flush happens
+	mockWriter := &mockLogsWriter{}
+	wal.logsWriter = mockWriter
+
+	// Operations on key_a (3 times)
+	futureA1 := wal.Set("key_a", "value1")
+	futureA2 := wal.Set("key_a", "value2")
+	futureA3 := wal.Delete("key_a")
+
+	// Operations on key_b (2 times)
+	futureB1 := wal.Set("key_b", "value1")
+	futureB2 := wal.Set("key_b", "value2")
+
+	// Operations on key_c (1 time)
+	futureC1 := wal.Set("key_c", "value1")
+
+	// Get all results
+	resultA1 := futureA1.Wait()
+	resultA2 := futureA2.Wait()
+	resultA3 := futureA3.Wait()
+	resultB1 := futureB1.Wait()
+	resultB2 := futureB2.Wait()
+	resultC1 := futureC1.Wait()
+
+	// Verify no errors
+	assert.NoError(t, resultA1.Error())
+	assert.NoError(t, resultA2.Error())
+	assert.NoError(t, resultA3.Error())
+	assert.NoError(t, resultB1.Error())
+	assert.NoError(t, resultB2.Error())
+	assert.NoError(t, resultC1.Error())
+
+	// All key_a operations should have count=3
+	assert.Equal(t, 3, resultA1.Count(), "All key_a operations should have count=3")
+	assert.Equal(t, 3, resultA2.Count(), "All key_a operations should have count=3")
+	assert.Equal(t, 3, resultA3.Count(), "All key_a operations should have count=3")
+
+	// All key_b operations should have count=2
+	assert.Equal(t, 2, resultB1.Count(), "All key_b operations should have count=2")
+	assert.Equal(t, 2, resultB2.Count(), "All key_b operations should have count=2")
+
+	// key_c operation should have count=1
+	assert.Equal(t, 1, resultC1.Count(), "key_c operation should have count=1")
+}
+
+func TestWAL_Counter_ErrorCase(t *testing.T) {
+	tempDir := t.TempDir()
+
+	config := &configuration.WALConfig{
+		DataDirectory:     tempDir,
+		MaxSegmentSize:    1024 * 1024,
+		FlushBatchSize:    2,
+		FlushBatchTimeout: 1000000,
+	}
+
+	wal := NewWAL(config)
+	defer wal.Shutdown()
+
+	// Replace with failing mock writer
+	mockWriter := &mockLogsWriter{writeError: assert.AnError}
+	wal.logsWriter = mockWriter
+
+	// Operations that will fail during flush
+	future1 := wal.Set("error_key", "value1")
+	future2 := wal.Set("error_key", "value2") // Should trigger flush and fail
+
+	result1 := future1.Wait()
+	result2 := future2.Wait()
+
+	// Both should have errors but still correct counts
+	assert.Error(t, result1.Error())
+	assert.Error(t, result2.Error())
+	assert.Equal(t, uint64(0), result1.LSN(), "LSN should be 0 on error")
+	assert.Equal(t, uint64(0), result2.LSN(), "LSN should be 0 on error")
+
+	// Count should still be correct even on error
+	assert.Equal(t, 2, result1.Count(), "Count should be correct even on error")
+	assert.Equal(t, 2, result2.Count(), "Count should be correct even on error")
+}
+
+func TestWAL_Counter_EmptyKey(t *testing.T) {
+	tempDir := t.TempDir()
+
+	config := &configuration.WALConfig{
+		DataDirectory:     tempDir,
+		MaxSegmentSize:    1024 * 1024,
+		FlushBatchSize:    4,
+		FlushBatchTimeout: 100000,
+	}
+
+	wal := NewWAL(config)
+	defer wal.Shutdown()
+
+	// Use mock writer to control when flush happens
+	mockWriter := &mockLogsWriter{}
+	wal.logsWriter = mockWriter
+
+	// Operations with empty key (edge case)
+	future1 := wal.Set("", "value1")
+	future2 := wal.Set("", "value2")
+	future3 := wal.Delete("")
+
+	// Operations with non-empty key
+	future4 := wal.Set("normal_key", "value")
+
+	result1 := future1.Wait()
+	result2 := future2.Wait()
+	result3 := future3.Wait()
+	result4 := future4.Wait()
+
+	// Verify no errors
+	assert.NoError(t, result1.Error())
+	assert.NoError(t, result2.Error())
+	assert.NoError(t, result3.Error())
+	assert.NoError(t, result4.Error())
+
+	// Empty key operations should have count=3
+	assert.Equal(t, 3, result1.Count(), "Empty key operations should have count=3")
+	assert.Equal(t, 3, result2.Count(), "Empty key operations should have count=3")
+	assert.Equal(t, 3, result3.Count(), "Empty key operations should have count=3")
+
+	// Normal key operation should have count=1
+	assert.Equal(t, 1, result4.Count(), "Normal key operation should have count=1")
+}
+
+func TestWAL_Counter_WithTimeoutFlush(t *testing.T) {
+	tempDir := t.TempDir()
+
+	config := &configuration.WALConfig{
+		DataDirectory:     tempDir,
+		MaxSegmentSize:    1024 * 1024,
+		FlushBatchSize:    10,
+		FlushBatchTimeout: 100000,
+	}
+
+	wal := NewWAL(config)
+	defer wal.Shutdown()
+
+	// Use mock writer to control when flush happens
+	mockWriter := &mockLogsWriter{}
+	wal.logsWriter = mockWriter
+
+	// Add operations that will be flushed together when batch is full
+	future1 := wal.Set("timeout_key", "value1")
+	future2 := wal.Set("timeout_key", "value2")
+	future3 := wal.Set("other_key", "value3") // This triggers flush
+
+	result1 := future1.Wait()
+	result2 := future2.Wait()
+	result3 := future3.Wait()
+
+	// Verify no errors
+	assert.NoError(t, result1.Error())
+	assert.NoError(t, result2.Error())
+	assert.NoError(t, result3.Error())
+
+	// timeout_key operations should have count=2
+	assert.Equal(t, 2, result1.Count(), "timeout_key operations should have count=2")
+	assert.Equal(t, 2, result2.Count(), "timeout_key operations should have count=2")
+
+	// other_key operation should have count=1
+	assert.Equal(t, 1, result3.Count(), "other_key operation should have count=1")
+
+	// Verify LSNs are correct
+	assert.Equal(t, uint64(1), result1.LSN())
+	assert.Equal(t, uint64(2), result2.LSN())
+	assert.Equal(t, uint64(3), result3.LSN())
 }
 
 type mockLogsWriter struct {

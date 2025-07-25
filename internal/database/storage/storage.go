@@ -5,13 +5,14 @@ import (
 	"errors"
 	"iter"
 
+	"go.uber.org/zap"
+
 	"github.com/EzhovAndrew/kv-db/internal/configuration"
 	"github.com/EzhovAndrew/kv-db/internal/database/compute"
 	"github.com/EzhovAndrew/kv-db/internal/database/storage/engine/in_memory"
 	"github.com/EzhovAndrew/kv-db/internal/database/storage/wal"
 	"github.com/EzhovAndrew/kv-db/internal/logging"
 	"github.com/EzhovAndrew/kv-db/internal/utils"
-	"go.uber.org/zap"
 )
 
 var (
@@ -44,10 +45,7 @@ type Engine interface {
 	Get(ctx context.Context, key string) (string, error)
 	Set(ctx context.Context, key, value string) error
 	Delete(ctx context.Context, key string) error
-	// if enabled, all operations applying will be ordered by LSN
-	EnableLSNOrdering()
-	DisableLSNOrdering()
-	SetCurrentAppliedLSN(lsn uint64)
+	Shutdown()
 }
 
 // WAL defines the interface for Write-Ahead Log operations
@@ -143,6 +141,7 @@ func (s *Storage) Shutdown() {
 		return
 	}
 	s.wal.Shutdown()
+	s.engine.Shutdown()
 }
 
 // ApplyLogs applies a batch of log entries for replication purposes
@@ -153,9 +152,6 @@ func (s *Storage) ApplyLogs(logs []*wal.LogEntry) error {
 	if s.wal == nil {
 		return ErrWALNotEnabled
 	}
-
-	s.engine.DisableLSNOrdering()
-	defer s.engine.EnableLSNOrdering()
 
 	// Write logs to WAL first for durability
 	if err := s.wal.WriteLogs(logs); err != nil {
@@ -183,9 +179,6 @@ func (s *Storage) ApplyLogs(logs []*wal.LogEntry) error {
 			lastAppliedLSN = log.LSN
 		}
 	}
-
-	// Update engine's current applied LSN
-	s.engine.SetCurrentAppliedLSN(lastAppliedLSN)
 
 	logging.Info("Applied logs for replication",
 		zap.Int("logCount", len(logs)),
@@ -220,12 +213,12 @@ func (s *Storage) handleWALOperation(ctx context.Context, operation func() *wal.
 	}
 
 	future := operation()
-	lsn, err := future.Wait()
-	if err != nil {
-		return ctx, err
+	result := future.Wait()
+	if result.Error() != nil {
+		return ctx, result.Error()
 	}
 
-	return utils.ContextWithLSN(ctx, lsn), nil
+	return utils.ContextWithLSNAndCount(ctx, result.LSN(), result.Count()), nil
 }
 
 // applyLogToEngine applies a single log entry to the storage engine
@@ -263,10 +256,11 @@ func (s *Storage) recover() error {
 		return nil
 	}
 
-	s.engine.DisableLSNOrdering()
-	defer s.engine.EnableLSNOrdering()
-
-	var lastAppliedLSN uint64
+	// Set last applied LSN to max uint64
+	// for replication purposes because after incrementing it will be 0
+	// and we will correctly distinguish between real applied log with lsn 0
+	// and current 0 that means that we have not applied any logs yet
+	lastAppliedLSN := ^uint64(0)
 	for log, err := range s.wal.Recover() {
 		if err != nil {
 			return errors.Join(ErrLogReadFailed, err)
@@ -281,7 +275,6 @@ func (s *Storage) recover() error {
 		lastAppliedLSN = log.LSN
 	}
 
-	s.engine.SetCurrentAppliedLSN(lastAppliedLSN)
 	s.wal.SetLastLSN(lastAppliedLSN)
 
 	logging.Info("Recovery completed",

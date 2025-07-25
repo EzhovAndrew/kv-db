@@ -19,7 +19,7 @@ func NewSegment(fileName string) *Segment {
 }
 
 func (s *Segment) open() error {
-	fd, err := os.OpenFile(s.FileName, os.O_CREATE|os.O_WRONLY, 0644)
+	fd, err := os.OpenFile(s.FileName, os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return fmt.Errorf("failed to open file %s: %w", s.FileName, err)
 	}
@@ -29,7 +29,7 @@ func (s *Segment) open() error {
 }
 
 func (s *Segment) openForAppend() error {
-	fd, err := os.OpenFile(s.FileName, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	fd, err := os.OpenFile(s.FileName, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return fmt.Errorf("failed to open file %s for append: %w", s.FileName, err)
 	}

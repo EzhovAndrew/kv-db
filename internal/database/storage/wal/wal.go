@@ -7,12 +7,13 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/EzhovAndrew/kv-db/internal/configuration"
 	"github.com/EzhovAndrew/kv-db/internal/database/compute"
 	"github.com/EzhovAndrew/kv-db/internal/database/storage/encoders"
 	"github.com/EzhovAndrew/kv-db/internal/database/storage/filesystem"
 	"github.com/EzhovAndrew/kv-db/internal/logging"
-	"go.uber.org/zap"
 )
 
 type LogEntry = encoders.Log
@@ -38,6 +39,7 @@ type WAL struct {
 
 	newLogsChan    chan LogMessage
 	pendingFutures []*Future
+	batchKeyCounts map[string]int
 
 	lsnGenerator *LSNGenerator
 
@@ -51,6 +53,7 @@ func NewWAL(config *configuration.WALConfig) *WAL {
 	wal := &WAL{
 		batch:          make([]*LogEntry, 0, config.FlushBatchSize),
 		pendingFutures: make([]*Future, 0, config.FlushBatchSize),
+		batchKeyCounts: make(map[string]int, config.FlushBatchSize),
 		lsnGenerator:   NewLSNGenerator(0),
 		newLogsChan:    make(chan LogMessage),
 		shutdownChan:   make(chan struct{}),
@@ -124,6 +127,10 @@ func (w *WAL) handleNewLogMessage(
 		timer.Reset(flushTimeout)
 	}
 
+	// Count key in batch
+	key := w.extractKey(logMessage.entry)
+	w.batchKeyCounts[key]++
+
 	w.batch = append(w.batch, logMessage.entry)
 	w.pendingFutures = append(w.pendingFutures, logMessage.future)
 
@@ -184,15 +191,27 @@ func (w *WAL) Shutdown() {
 // completeBatchWithSuccess completes all pending futures with success
 func (w *WAL) completeBatchWithSuccess() {
 	for i, future := range w.pendingFutures {
-		future.complete(w.batch[i].LSN, nil)
+		key := w.extractKey(w.batch[i])
+		count := w.batchKeyCounts[key]
+		future.complete(&FutureResult{
+			lsn:   w.batch[i].LSN,
+			count: count,
+			err:   nil,
+		})
 	}
 	w.clearBatch()
 }
 
 // completeBatchWithError completes all pending futures with the given error
 func (w *WAL) completeBatchWithError(err error) {
-	for _, future := range w.pendingFutures {
-		future.complete(0, err)
+	for i, future := range w.pendingFutures {
+		key := w.extractKey(w.batch[i])
+		count := w.batchKeyCounts[key]
+		future.complete(&FutureResult{
+			lsn:   0,
+			count: count,
+			err:   err,
+		})
 	}
 	w.clearBatch()
 }
@@ -201,6 +220,11 @@ func (w *WAL) completeBatchWithError(err error) {
 func (w *WAL) clearBatch() {
 	w.pendingFutures = w.pendingFutures[:0]
 	w.batch = w.batch[:0]
+	w.batchKeyCounts = make(map[string]int)
+}
+
+func (w *WAL) extractKey(entry *LogEntry) string {
+	return entry.Arguments[0]
 }
 
 // executeOperation executes a WAL operation with the given log entry
@@ -212,7 +236,11 @@ func (w *WAL) executeOperation(entry *LogEntry) *Future {
 		// Successfully sent to channel
 	case <-w.shutdownChan:
 		// WAL is shutting down, operation failed
-		future.complete(0, ErrWALShuttingDown)
+		future.complete(&FutureResult{
+			lsn:   0,
+			count: 0,
+			err:   ErrWALShuttingDown,
+		})
 	}
 
 	return future
@@ -268,8 +296,8 @@ func (w *WAL) WriteLogs(logs []*LogEntry) error {
 	for i, future := range futures {
 		select {
 		case <-future.Done():
-			if future.Error() != nil {
-				return fmt.Errorf("log %d failed: %w", i, future.Error())
+			if future.Wait().Error() != nil {
+				return fmt.Errorf("log %d failed: %w", i, future.Wait().Error())
 			}
 		case <-w.shutdownChan:
 			return fmt.Errorf("WAL shut down while waiting for log %d", i)

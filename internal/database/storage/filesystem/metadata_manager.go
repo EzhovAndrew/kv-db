@@ -9,9 +9,10 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"go.uber.org/zap"
+
 	"github.com/EzhovAndrew/kv-db/internal/concurrency"
 	"github.com/EzhovAndrew/kv-db/internal/logging"
-	"go.uber.org/zap"
 )
 
 type FileMetadataManager struct {
@@ -39,7 +40,7 @@ func (w *WALMetadata) GetLSNStart() uint64 {
 var ErrNoWALFilesFound = fmt.Errorf("no WAL files found")
 
 func NewFileMetadataManager(metadataFilePath string) (*FileMetadataManager, error) {
-	fd, err := os.OpenFile(metadataFilePath, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644)
+	fd, err := os.OpenFile(metadataFilePath, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open metadata file %s: %w", metadataFilePath, err)
 	}

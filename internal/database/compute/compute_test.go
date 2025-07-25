@@ -270,5 +270,4 @@ func TestCompute_Parse_ErrorTypes(t *testing.T) {
 		assert.Contains(t, ErrUnknownCommand.Error(), "unknown command")
 		assert.Contains(t, ErrInvalidArgumentsNumber.Error(), "invalid arguments number")
 	})
-
 }

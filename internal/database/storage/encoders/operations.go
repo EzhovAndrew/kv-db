@@ -6,9 +6,10 @@ import (
 	"errors"
 	"io"
 
+	"go.uber.org/zap"
+
 	"github.com/EzhovAndrew/kv-db/internal/logging"
 	"github.com/EzhovAndrew/kv-db/internal/utils"
-	"go.uber.org/zap"
 )
 
 var (

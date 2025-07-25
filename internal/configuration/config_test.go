@@ -70,7 +70,7 @@ network:
 invalid_yaml_syntax: [unclosed bracket
 `
 
-	err := os.WriteFile(configFile, []byte(invalidYAML), 0644)
+	err := os.WriteFile(configFile, []byte(invalidYAML), 0o644)
 	require.NoError(t, err)
 
 	os.Setenv("CONFIG_FILEPATH", configFile)
@@ -103,7 +103,7 @@ network:
   graceful_shutdown_timeout: 5
 `
 
-	err := os.WriteFile(configFile, []byte(validYAML), 0644)
+	err := os.WriteFile(configFile, []byte(validYAML), 0o644)
 	require.NoError(t, err)
 
 	os.Setenv("CONFIG_FILEPATH", configFile)
@@ -151,7 +151,7 @@ wal:
   data_directory: "/data/kv_db/wal"
 `
 
-	err := os.WriteFile(configFile, []byte(validYAML), 0644)
+	err := os.WriteFile(configFile, []byte(validYAML), 0o644)
 	require.NoError(t, err)
 
 	os.Setenv("CONFIG_FILEPATH", configFile)
@@ -222,7 +222,7 @@ network:
   graceful_shutdown_timeout: 5
 `
 
-			err := os.WriteFile(configFile, []byte(yamlContent), 0644)
+			err := os.WriteFile(configFile, []byte(yamlContent), 0o644)
 			require.NoError(t, err)
 
 			os.Setenv("CONFIG_FILEPATH", configFile)
@@ -307,7 +307,7 @@ network:
   graceful_shutdown_timeout: 5
 `
 
-			err := os.WriteFile(configFile, []byte(yamlContent), 0644)
+			err := os.WriteFile(configFile, []byte(yamlContent), 0o644)
 			require.NoError(t, err)
 
 			os.Setenv("CONFIG_FILEPATH", configFile)
@@ -400,7 +400,7 @@ network:
   graceful_shutdown_timeout: 5
 `
 
-			err := os.WriteFile(configFile, []byte(yamlContent), 0644)
+			err := os.WriteFile(configFile, []byte(yamlContent), 0o644)
 			require.NoError(t, err)
 
 			os.Setenv("CONFIG_FILEPATH", configFile)
@@ -481,7 +481,7 @@ network:
   graceful_shutdown_timeout: 5
 `
 
-			err := os.WriteFile(configFile, []byte(yamlContent), 0644)
+			err := os.WriteFile(configFile, []byte(yamlContent), 0o644)
 			require.NoError(t, err)
 
 			os.Setenv("CONFIG_FILEPATH", configFile)
@@ -555,7 +555,7 @@ network:
   graceful_shutdown_timeout: 5
 `
 
-			err := os.WriteFile(configFile, []byte(yamlContent), 0644)
+			err := os.WriteFile(configFile, []byte(yamlContent), 0o644)
 			require.NoError(t, err)
 
 			os.Setenv("CONFIG_FILEPATH", configFile)
@@ -636,7 +636,7 @@ network:
   graceful_shutdown_timeout: ` + strconv.Itoa(tt.gracefulShutdownTimeout) + `
 `
 
-			err := os.WriteFile(configFile, []byte(yamlContent), 0644)
+			err := os.WriteFile(configFile, []byte(yamlContent), 0o644)
 			require.NoError(t, err)
 
 			os.Setenv("CONFIG_FILEPATH", configFile)
@@ -700,7 +700,7 @@ wal:
   flush_batch_timeout: 10
   max_segment_size: 1048576
 `
-			err := os.WriteFile(configFile, []byte(yamlContent), 0644)
+			err := os.WriteFile(configFile, []byte(yamlContent), 0o644)
 			require.NoError(t, err)
 
 			os.Setenv("CONFIG_FILEPATH", configFile)
@@ -771,7 +771,7 @@ wal:
   flush_batch_timeout: 10
   max_segment_size: ` + strconv.Itoa(tt.max_segment_size) + `
 `
-			err := os.WriteFile(configFile, []byte(yamlContent), 0644)
+			err := os.WriteFile(configFile, []byte(yamlContent), 0o644)
 			require.NoError(t, err)
 
 			os.Setenv("CONFIG_FILEPATH", configFile)
@@ -842,7 +842,7 @@ wal:
   flush_batch_timeout: 10
   max_segment_size: 10485760
 `
-			err := os.WriteFile(configFile, []byte(yamlContent), 0644)
+			err := os.WriteFile(configFile, []byte(yamlContent), 0o644)
 			require.NoError(t, err)
 
 			os.Setenv("CONFIG_FILEPATH", configFile)
@@ -913,7 +913,7 @@ wal:
   flush_batch_timeout: ` + strconv.Itoa(tt.flush_batch_timeout) + `
   max_segment_size: 10485760
 `
-			err := os.WriteFile(configFile, []byte(yamlContent), 0644)
+			err := os.WriteFile(configFile, []byte(yamlContent), 0o644)
 			require.NoError(t, err)
 
 			os.Setenv("CONFIG_FILEPATH", configFile)
@@ -993,7 +993,7 @@ logging:
 			tmpDir := t.TempDir()
 			configFile := filepath.Join(tmpDir, "config.yaml")
 
-			err := os.WriteFile(configFile, []byte(tt.yamlContent), 0644)
+			err := os.WriteFile(configFile, []byte(tt.yamlContent), 0o644)
 			require.NoError(t, err)
 
 			os.Setenv("CONFIG_FILEPATH", configFile)
@@ -1123,7 +1123,7 @@ replication:
   master_port: ` + tt.masterPort
 			}
 
-			err := os.WriteFile(configFile, []byte(yamlContent), 0644)
+			err := os.WriteFile(configFile, []byte(yamlContent), 0o644)
 			require.NoError(t, err)
 
 			os.Setenv("CONFIG_FILEPATH", configFile)
@@ -1173,7 +1173,7 @@ replication:
   role: master
 `
 
-	err := os.WriteFile(configFile, []byte(yamlContent), 0644)
+	err := os.WriteFile(configFile, []byte(yamlContent), 0o644)
 	require.NoError(t, err)
 
 	os.Setenv("CONFIG_FILEPATH", configFile)
@@ -1216,7 +1216,7 @@ replication:
   master_port: "9090"
 `
 
-	err := os.WriteFile(configFile, []byte(validYAML), 0644)
+	err := os.WriteFile(configFile, []byte(validYAML), 0o644)
 	require.NoError(t, err)
 
 	os.Setenv("CONFIG_FILEPATH", configFile)
@@ -1276,7 +1276,7 @@ network:
   graceful_shutdown_timeout: 0
 `
 
-	err := os.WriteFile(configFile, []byte(minimalYAML), 0644)
+	err := os.WriteFile(configFile, []byte(minimalYAML), 0o644)
 	require.NoError(t, err)
 
 	os.Setenv("CONFIG_FILEPATH", configFile)
@@ -1326,7 +1326,7 @@ replication:
   role: master
 `
 
-	err := os.WriteFile(configFile, []byte(maximalYAML), 0644)
+	err := os.WriteFile(configFile, []byte(maximalYAML), 0o644)
 	require.NoError(t, err)
 
 	os.Setenv("CONFIG_FILEPATH", configFile)

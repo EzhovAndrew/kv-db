@@ -8,10 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EzhovAndrew/kv-db/internal/configuration"
-	"github.com/EzhovAndrew/kv-db/internal/logging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/EzhovAndrew/kv-db/internal/configuration"
+	"github.com/EzhovAndrew/kv-db/internal/logging"
 )
 
 func TestMain(m *testing.M) {
