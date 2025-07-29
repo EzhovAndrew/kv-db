@@ -8,7 +8,7 @@
 - **In-Memory Storage**: Fast key-value operations with sharded concurrent access based on runtime.NumCPU()
 - **TCP Protocol**: Simple text-based commands over TCP for easy integration
 - **Interactive Client**: Feature-rich CLI client with autocomplete and command history
-- **🆕 Go SDK**: Easy-to-use client library for seamless integration into Go projects
+- **Go SDK**: Easy-to-use client library for seamless integration into Go projects
 
 ### 💾 Persistence & Durability
 - **Write-Ahead Log (WAL)**: Ensures data durability with configurable batching
@@ -136,11 +136,11 @@ $ go run cmd/client/main.go
 KV-DB Client
 Type 'HELP' for available commands or 'EXIT'/'QUIT' to quit
 
-kv-db> SET user:1 "John Doe"
+kv-db> SET user:1 JohnDoe
 OK
 
 kv-db> GET user:1
-Value: John Doe
+Value: JohnDoe
 
 kv-db> SET counter 42
 OK
@@ -250,7 +250,6 @@ The slave will automatically:
 - Connect to the master
 - Sync existing data
 - Receive real-time updates
-- Handle reconnection on failures
 
 ### 3. Verify Replication
 ```bash
@@ -321,6 +320,7 @@ kv-db/
 - **Replication**: Master-slave logical asynchronous push replication
 - **Network**: TCP protocol implementation
 - **Client**: Interactive CLI with rich features
+- **Go SDK**: Easy-to-use client library for seamless integration into Go projects
 
 ## 🤝 Contributing
 
@@ -347,7 +347,7 @@ Your input helps me grow as a developer! 🚀
 ## 🎯 Roadmap
 
 - [ ] Integration tests
-- [ ] SDK
+- [X] SDK
 - [X] Sharded hash map in engine
 - [ ] WAL segments compaction
 - [ ] Query language extensions

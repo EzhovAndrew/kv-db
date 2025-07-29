@@ -33,8 +33,8 @@ type TestData struct {
 }
 
 func generateTestData(id int) TestData {
-	// Generate realistic but smaller test data that fits within 4096 byte limit
-	content := "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore."
+	// Generate realistic test data that fits within 4096 byte limit
+	content := "Loremipsumdolorsitamet,consecteturadipiscingelit.Seddoeiusmodtemporincididuntutlabore."
 
 	return TestData{
 		ID:     id,
