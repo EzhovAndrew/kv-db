@@ -283,7 +283,7 @@ func TestByteMethods(t *testing.T) {
 	// Test that GetBytes returns proper byte slice
 	if len(retrievedBytes) > 0 {
 		// Verify it's actually a byte slice
-		var testByte = retrievedBytes[0]
+		testByte := retrievedBytes[0]
 		_ = testByte // Use the variable to avoid unused error
 	}
 }

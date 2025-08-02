@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"strings"
 	"sync"
 	"time"
 )
@@ -149,9 +148,8 @@ func (c *Client) GetBytes(ctx context.Context, key string) ([]byte, error) {
 		return nil, err
 	}
 
-	// Handle key not found - need to check the response as string for this
-	responseStr := string(response)
-	if strings.Contains(responseStr, "key not found") || strings.Contains(responseStr, "not found") {
+	// Handle key not found
+	if bytes.Contains(response, []byte("key not found")) || bytes.Contains(response, []byte("not found")) {
 		return nil, &KeyNotFoundError{Key: key}
 	}
 
@@ -355,7 +353,6 @@ func (c *Client) sendCommandBytes(ctx context.Context, command []byte) ([]byte, 
 		}
 	}
 
-	// Send command as bytes
 	_, err := conn.Write(command)
 	if err != nil {
 		c.disconnect()

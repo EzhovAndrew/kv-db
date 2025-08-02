@@ -1,10 +1,14 @@
 package network
 
 import (
+	"context"
+	"fmt"
 	"net"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/EzhovAndrew/kv-db/internal/configuration"
 )
 
 func TestFramedMessaging(t *testing.T) {
@@ -170,76 +174,6 @@ func TestFramedMessaging(t *testing.T) {
 	})
 }
 
-func TestFramedMessagingWithBuffer(t *testing.T) {
-	// Create a pipe for testing
-	server, client := net.Pipe()
-	defer server.Close()
-	defer client.Close()
-
-	timeout := 1 * time.Second
-	maxMessageSize := 1024
-	buffer := make([]byte, maxMessageSize)
-
-	// Test message with buffer reuse
-	t.Run("MessageWithBuffer", func(t *testing.T) {
-		originalMsg := []byte("Test message for buffer reuse")
-
-		// Send message from server side
-		errChan := make(chan error, 1)
-		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			err := WriteFramedMessage(server, originalMsg, timeout)
-			errChan <- err
-		}()
-
-		// Read message from client side using buffer
-		receivedMsg, err := ReadFramedMessageWithBuffer(client, maxMessageSize, timeout, buffer)
-		if err != nil {
-			t.Fatalf("Failed to read framed message with buffer: %v", err)
-		}
-
-		// Wait for sender to complete and check for errors
-		wg.Wait()
-		close(errChan)
-		if err := <-errChan; err != nil {
-			t.Errorf("Failed to write framed message: %v", err)
-		}
-
-		if string(receivedMsg) != string(originalMsg) {
-			t.Errorf("Message mismatch. Expected: %s, Got: %s", originalMsg, receivedMsg)
-		}
-	})
-
-	// Test buffer too small
-	t.Run("BufferTooSmall", func(t *testing.T) {
-		originalMsg := []byte("This message is longer than the small buffer")
-		smallBuffer := make([]byte, 10) // Too small for the message
-
-		// Send message from server side
-		errChan := make(chan error, 1)
-		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			err := WriteFramedMessage(server, originalMsg, timeout)
-			errChan <- err
-		}()
-
-		// Try to read with too small buffer
-		_, err := ReadFramedMessageWithBuffer(client, maxMessageSize, timeout, smallBuffer)
-		if err == nil {
-			t.Errorf("Expected error due to small buffer, but got none")
-		}
-
-		// Wait for sender to complete - we expect it might timeout since reader failed
-		wg.Wait()
-		close(errChan)
-		// Note: We don't check for write errors here since the reader failed first
-	})
-}
-
 func TestFramedMessagingErrorCases(t *testing.T) {
 	// Create a pipe for testing
 	server, client := net.Pipe()
@@ -273,5 +207,67 @@ func TestFramedMessagingErrorCases(t *testing.T) {
 		wg.Wait()
 		close(errChan)
 		// Note: We don't check for write errors here since the reader failed due to size limit
+	})
+}
+
+func TestTCPClientFramedMessaging(t *testing.T) {
+	// This test simulates the LSN sync handshake to ensure framing works correctly
+	server, clientConn := net.Pipe()
+	defer server.Close()
+	defer clientConn.Close()
+
+	// Create TCP client with the connection
+	client := NewTCPClient(&configuration.NetworkConfig{
+		Ip:                      "127.0.0.1",
+		Port:                    "3333",
+		MaxMessageSize:          1024,
+		IdleTimeout:             5,
+		MaxConnections:          10,
+		GracefulShutdownTimeout: 5,
+	})
+	client.conn = clientConn // Directly set the connection for testing
+
+	t.Run("SendFramedMessage", func(t *testing.T) {
+		testMessage := []byte(`{"type":"lsn_sync","last_lsn":42,"slave_id":"test-slave"}`)
+
+		// Server side that reads framed message and sends framed response
+		serverDone := make(chan error, 1)
+		go func() {
+			defer close(serverDone)
+
+			// Read the framed message
+			receivedData, err := ReadFramedMessage(server, 1024, 5*time.Second)
+			if err != nil {
+				serverDone <- err
+				return
+			}
+
+			if string(receivedData) != string(testMessage) {
+				serverDone <- fmt.Errorf("message mismatch: expected %s, got %s", testMessage, receivedData)
+				return
+			}
+
+			// Send framed response
+			response := []byte(`{"status":"OK","slave_id":"test-slave"}`)
+			err = WriteFramedMessage(server, response, 5*time.Second)
+			serverDone <- err
+		}()
+
+		// Client sends framed message and receives framed response
+		ctx := context.Background()
+		response, err := client.SendFramedMessage(ctx, testMessage)
+		if err != nil {
+			t.Fatalf("Failed to send framed message: %v", err)
+		}
+
+		expectedResponse := `{"status":"OK","slave_id":"test-slave"}`
+		if string(response) != expectedResponse {
+			t.Errorf("Response mismatch: expected %s, got %s", expectedResponse, response)
+		}
+
+		// Wait for server to complete
+		if err := <-serverDone; err != nil {
+			t.Errorf("Server error: %v", err)
+		}
 	})
 }

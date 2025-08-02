@@ -154,11 +154,11 @@ func (s *TCPServer) acceptConnections(ctx context.Context, connectionHandler fun
 func (s *TCPServer) rejectConnection(conn net.Conn) {
 	_, err := conn.Write([]byte("ERROR: Connection limit exceeded, try again later"))
 	if err != nil {
-		logging.Error("unable to send message about connection limit exceeded", zap.Error(err))
+		logging.Warn("unable to send message about connection limit exceeded", zap.Error(err))
 	}
 	err = conn.Close()
 	if err != nil {
-		logging.Error("error in conn.Close()", zap.Error(err))
+		logging.Warn("error in conn.Close()", zap.Error(err))
 	}
 }
 
@@ -221,7 +221,7 @@ func (s *TCPServer) readMessage(conn net.Conn, buffer *[]byte) ([]byte, error) {
 
 func (s *TCPServer) readInitialData(conn net.Conn, buffer *[]byte) ([]byte, error) {
 	timeout := time.Second * time.Duration(s.cfg.IdleTimeout)
-	data, err := ReadFramedMessageWithBuffer(conn, s.cfg.MaxMessageSize, timeout, *buffer)
+	data, err := ReadFramedMessageInPlace(conn, s.cfg.MaxMessageSize, timeout, *buffer)
 	if err != nil {
 		if s.isConnectionClosed(err) {
 			return nil, err

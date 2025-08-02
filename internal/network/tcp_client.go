@@ -358,3 +358,29 @@ func (c *TCPClient) getRemoteAddrString() string {
 	}
 	return "unknown"
 }
+
+// SendFramedMessage sends a message using length-prefixed framing (for replication)
+func (c *TCPClient) SendFramedMessage(ctx context.Context, message []byte) ([]byte, error) {
+	return c.SendFramedMessageWithTimeout(ctx, message, c.timeout)
+}
+
+// SendFramedMessageWithTimeout sends a message using framing with custom timeout (for replication)
+func (c *TCPClient) SendFramedMessageWithTimeout(
+	ctx context.Context,
+	message []byte,
+	timeout time.Duration,
+) ([]byte, error) {
+	if err := c.validateConnection(); err != nil {
+		return nil, err
+	}
+
+	if err := c.validateMessageSize(message); err != nil {
+		return nil, err
+	}
+
+	if err := WriteFramedMessage(c.conn, message, timeout); err != nil {
+		return nil, err
+	}
+
+	return ReadFramedMessage(c.conn, c.cfg.MaxMessageSize, timeout)
+}

@@ -42,11 +42,11 @@ func generateTestData(id int) TestData {
 		Email:  fmt.Sprintf("user%d@example.com", id),
 		Active: id%2 == 0,
 		Tags:   []string{"engineering", "backend", fmt.Sprintf("level_%d", id%5)},
-		Metadata: map[string]interface{}{
+		Metadata: map[string]any{
 			"department": "Engineering",
 			"level":      id % 5,
 			"projects":   []string{"kv-db", "api-client"},
-			"settings": map[string]interface{}{
+			"settings": map[string]any{
 				"theme":    "dark",
 				"language": "en",
 			},
