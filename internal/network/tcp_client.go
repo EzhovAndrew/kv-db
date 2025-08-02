@@ -263,15 +263,13 @@ func (c *TCPClient) startNewPushMode(ctx context.Context, handler MessageHandler
 func (c *TCPClient) pushModeLoop() {
 	defer c.pushWg.Done()
 
-	buffer := make([]byte, c.cfg.MaxMessageSize+1)
-
 	for {
 		if c.shouldStopPushMode() {
 			logging.Info("Push mode loop stopped due to context cancellation")
 			return
 		}
 
-		message, err := c.readPushMessage(buffer)
+		message, err := c.readPushMessage()
 		if err != nil {
 			if c.handlePushReadError(err) {
 				continue // Continue for timeout errors
@@ -296,32 +294,9 @@ func (c *TCPClient) shouldStopPushMode() bool {
 	}
 }
 
-func (c *TCPClient) readPushMessage(buffer []byte) ([]byte, error) {
-	if err := c.conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
-		logging.Error("Failed to set read deadline in push mode", zap.Error(err))
-		return nil, err
-	}
-
-	n, err := c.conn.Read(buffer)
-	if err != nil {
-		return nil, err
-	}
-
-	if n > c.cfg.MaxMessageSize {
-		logging.Warn("Received message exceeds maximum size in push mode, skipping",
-			zap.Int("message_size", n),
-			zap.Int("max_size", c.cfg.MaxMessageSize))
-		return nil, nil // Return nil to indicate skip
-	}
-
-	if n == 0 {
-		logging.Info("Received empty message in push mode, skipping")
-		return nil, nil // Return nil to indicate skip
-	}
-
-	message := make([]byte, n)
-	copy(message, buffer[:n])
-	return message, nil
+func (c *TCPClient) readPushMessage() ([]byte, error) {
+	timeout := time.Second * time.Duration(c.cfg.IdleTimeout)
+	return ReadFramedMessage(c.conn, c.cfg.MaxMessageSize, timeout)
 }
 
 func (c *TCPClient) handlePushReadError(err error) bool {
@@ -382,4 +357,30 @@ func (c *TCPClient) getRemoteAddrString() string {
 		return c.conn.RemoteAddr().String()
 	}
 	return "unknown"
+}
+
+// SendFramedMessage sends a message using length-prefixed framing (for replication)
+func (c *TCPClient) SendFramedMessage(ctx context.Context, message []byte) ([]byte, error) {
+	return c.SendFramedMessageWithTimeout(ctx, message, c.timeout)
+}
+
+// SendFramedMessageWithTimeout sends a message using framing with custom timeout (for replication)
+func (c *TCPClient) SendFramedMessageWithTimeout(
+	ctx context.Context,
+	message []byte,
+	timeout time.Duration,
+) ([]byte, error) {
+	if err := c.validateConnection(); err != nil {
+		return nil, err
+	}
+
+	if err := c.validateMessageSize(message); err != nil {
+		return nil, err
+	}
+
+	if err := WriteFramedMessage(c.conn, message, timeout); err != nil {
+		return nil, err
+	}
+
+	return ReadFramedMessage(c.conn, c.cfg.MaxMessageSize, timeout)
 }
