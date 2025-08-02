@@ -8,6 +8,7 @@
 - **In-Memory Storage**: Fast key-value operations with sharded concurrent access based on runtime.NumCPU()
 - **TCP Protocol**: Simple text-based commands over TCP for easy integration
 - **Interactive Client**: Feature-rich CLI client with autocomplete and command history
+- **Go SDK**: Easy-to-use client library for seamless integration into Go projects
 
 ### 💾 Persistence & Durability
 - **Write-Ahead Log (WAL)**: Ensures data durability with configurable batching
@@ -26,49 +27,57 @@
 - **Comprehensive Logging**: Structured logging with configurable levels
 - **Concurrent Safety**: Thread-safe operations with optimized locking
 
+## 📦 SDK for Go Projects
+
+For developers who want to integrate kv-db into their Go applications, we provide a user-friendly SDK:
+
+```bash
+go get github.com/EzhovAndrew/kv-db/api
+```
+
+### Quick API Client Example
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+
+    "github.com/EzhovAndrew/kv-db/api"
+)
+
+func main() {
+    // Create client with default configuration
+    client, err := api.NewClient(nil)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer client.Close()
+
+    ctx := context.Background()
+
+    // Simple operations
+    err = client.Set(ctx, "user:123", "JohnDoe")
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    value, err := client.Get(ctx, "user:123")
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    fmt.Printf("Value: %s\n", value) // Output: Value: JohnDoe
+}
+```
+
+**📚 [Full API Client Documentation](api/README.md)**
+
 ## 🏗️ Architecture
 
-```
-┌─────────────────┐    ┌─────────────────┐
-│  TCP Client     │    │   TCP Server    │
-│                 │    │                 │
-│ • Interactive   │◄──►│ • Multi-client  │
-│ • Autocomplete  │    │ • Connection    │
-│ • History       │    │   pooling       │
-└─────────────────┘    └─────────────────┘
-                               │
-                               ▼
-                    ┌─────────────────┐
-                    │    Database     │
-                    │                 │
-                    │ • Command Parser│
-                    │ • Query Engine  │
-                    └─────────┬───────┘
-                              │
-                              ▼
-        ┌─────────────────────┴─────────────────────┐
-        │                Storage                    │
-        │                                           │
-        │  ┌─────────────┐    ┌─────────────────┐   │
-        │  │   Engine    │    │       WAL       │   │
-        │  │             │    │                 │   │
-        │  │ • In-Memory │    │ • Batching      │   │
-        │  │ • Sharded   │    │ • Persistence   │   │
-        │  │   Hash Map  │    │ • Recovery      │   │
-        │  │ • Per shard │    │                 │   │
-        │  │   locking   │    │                 │   │ 
-        │  └─────────────┘    └─────────────────┘   │
-        └───────────────────────────────────────────┘
-                              │
-                              ▼
-                    ┌─────────────────┐
-                    │   Replication   │
-                    │                 │
-                    │ • Async Push    │
-                    │ • Master/Slave  │
-                    │ • Auto-sync     │
-                    └─────────────────┘
-```
+![kv-db Architecture](images/architecture.png)
 
 ## 🚀 Quick Start
 
@@ -94,13 +103,29 @@ CONFIG_FILEPATH=./config.yaml go run cmd/server/main.go
 
 The server will start on `127.0.0.1:3223` by default.
 
-### 3. Connect with the Interactive Client
+### 3. Choose Your Interface
+
+#### Option A: Interactive CLI Client
 ```bash
 # Connect to local server
 go run cmd/client/main.go
 
 # Or connect to remote server
 go run cmd/client/main.go -host 192.168.1.100 -port 3223
+```
+
+#### Option B: Go API Client in Your Project
+```bash
+# Install the API client
+go get github.com/EzhovAndrew/kv-db/api
+
+# Use in your code (see API client example above)
+```
+
+#### Option C: Direct TCP Connection
+```bash
+# Connect via telnet or netcat
+telnet 127.0.0.1 3223
 ```
 
 ## 💻 Usage Examples
@@ -111,11 +136,11 @@ $ go run cmd/client/main.go
 KV-DB Client
 Type 'HELP' for available commands or 'EXIT'/'QUIT' to quit
 
-kv-db> SET user:1 "John Doe"
+kv-db> SET user:1 JohnDoe
 OK
 
 kv-db> GET user:1
-Value: John Doe
+Value: JohnDoe
 
 kv-db> SET counter 42
 OK
@@ -139,6 +164,16 @@ Available commands:
 Use 'HELP <command>' for detailed information about a specific command
 ```
 
+### API Client Usage in Go Applications
+
+See [`api/examples/basic_usage/main.go`](api/examples/basic_usage/main.go) for comprehensive examples including:
+
+- Configuration options
+- Error handling
+- Context timeouts
+- Concurrent usage
+- JSON data storage
+
 ### Available Commands
 
 | Command | Description | Usage | Example |
@@ -146,8 +181,6 @@ Use 'HELP <command>' for detailed information about a specific command
 | `GET` | Retrieve value by key | `GET <key>` | `GET user:123` |
 | `SET` | Store key-value pair | `SET <key> <value>` | `SET name "Alice"` |
 | `DEL` | Delete key-value pair | `DEL <key>` | `DEL temp_data` |
-| `HELP` | Show command help | `HELP [command]` | `HELP SET` |
-| `EXIT/QUIT` | Exit the client | `EXIT` | `EXIT` |
 
 ## ⚙️ Configuration
 
@@ -217,7 +250,6 @@ The slave will automatically:
 - Connect to the master
 - Sync existing data
 - Receive real-time updates
-- Handle reconnection on failures
 
 ### 3. Verify Replication
 ```bash
@@ -285,9 +317,10 @@ kv-db/
 - **Database**: Main database interface and request handling
 - **Storage Engine**: In-memory sharded hash map with concurrent access, partitioned by runtime.NumCPU()
 - **WAL**: Write-ahead logging with batching and recovery
-- **Replication**: Master-slave logical asynchronous push replication 
+- **Replication**: Master-slave logical asynchronous push replication
 - **Network**: TCP protocol implementation
 - **Client**: Interactive CLI with rich features
+- **Go SDK**: Easy-to-use client library for seamless integration into Go projects
 
 ## 🤝 Contributing
 
@@ -299,9 +332,9 @@ kv-db/
 
 ## 📝 License
 
-This project is a personal learning project demonstrating database internals and distributed systems concepts. 
+This project is a personal learning project demonstrating database internals and distributed systems concepts.
 
-**Feel free to use this code for learning, experimentation, or any other purpose!** 
+**Feel free to use this code for learning, experimentation, or any other purpose!**
 
 I would greatly appreciate any feedback about the code quality, architecture decisions, or suggestions for improvements. If you find bugs, have ideas for optimizations, or spot areas where the code could be cleaner, please don't hesitate to:
 
@@ -309,12 +342,12 @@ I would greatly appreciate any feedback about the code quality, architecture dec
 - Submit a pull request with enhancements
 - Reach out with general feedback or questions
 
-Your input helps me grow as a developer! 🚀 
+Your input helps me grow as a developer! 🚀
 
 ## 🎯 Roadmap
 
 - [ ] Integration tests
-- [ ] SDK
+- [X] SDK
 - [X] Sharded hash map in engine
 - [ ] WAL segments compaction
 - [ ] Query language extensions

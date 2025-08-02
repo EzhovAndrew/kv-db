@@ -154,11 +154,11 @@ func (s *TCPServer) acceptConnections(ctx context.Context, connectionHandler fun
 func (s *TCPServer) rejectConnection(conn net.Conn) {
 	_, err := conn.Write([]byte("ERROR: Connection limit exceeded, try again later"))
 	if err != nil {
-		logging.Error("unable to send message about connection limit exceeded", zap.Error(err))
+		logging.Warn("unable to send message about connection limit exceeded", zap.Error(err))
 	}
 	err = conn.Close()
 	if err != nil {
-		logging.Error("error in conn.Close()", zap.Error(err))
+		logging.Warn("error in conn.Close()", zap.Error(err))
 	}
 }
 
@@ -220,13 +220,8 @@ func (s *TCPServer) readMessage(conn net.Conn, buffer *[]byte) ([]byte, error) {
 }
 
 func (s *TCPServer) readInitialData(conn net.Conn, buffer *[]byte) ([]byte, error) {
-	err := conn.SetReadDeadline(time.Now().Add(time.Second * time.Duration(s.cfg.IdleTimeout)))
-	if err != nil {
-		logging.Warn("unable to set read deadline for initial data", zap.Error(err))
-		return nil, err
-	}
-
-	count, err := conn.Read(*buffer)
+	timeout := time.Second * time.Duration(s.cfg.IdleTimeout)
+	data, err := ReadFramedMessageInPlace(conn, s.cfg.MaxMessageSize, timeout, *buffer)
 	if err != nil {
 		if s.isConnectionClosed(err) {
 			return nil, err
@@ -235,9 +230,7 @@ func (s *TCPServer) readInitialData(conn net.Conn, buffer *[]byte) ([]byte, erro
 		return nil, err
 	}
 
-	initialData := make([]byte, count)
-	copy(initialData, (*buffer)[:count])
-	return initialData, nil
+	return data, nil
 }
 
 func (s *TCPServer) isConnectionClosed(err error) bool {
@@ -274,7 +267,7 @@ func (s *TCPServer) processDataStream(ctx context.Context, conn net.Conn, handle
 			continue // Skip empty data chunks
 		}
 
-		if err := s.writeWithDeadline(conn, data); err != nil {
+		if err := s.writeFramedWithDeadline(conn, data); err != nil {
 			logging.Warn("unable to write stream data to connection",
 				zap.String("address", conn.RemoteAddr().String()),
 				zap.Error(err))
@@ -296,7 +289,7 @@ func (s *TCPServer) handleStreamError(conn net.Conn, iterErr error) {
 		zap.String("address", conn.RemoteAddr().String()))
 
 	errorMsg := fmt.Sprintf("ERROR: %s", iterErr.Error())
-	if err := s.writeWithDeadline(conn, []byte(errorMsg)); err != nil {
+	if err := s.writeFramedWithDeadline(conn, []byte(errorMsg)); err != nil {
 		logging.Warn("unable to send error message to client", zap.Error(err))
 	}
 }
@@ -312,4 +305,10 @@ func (s *TCPServer) writeWithDeadline(conn net.Conn, data []byte) error {
 	}
 
 	return nil
+}
+
+// writeFramedWithDeadline writes data with a length prefix for proper message framing
+func (s *TCPServer) writeFramedWithDeadline(conn net.Conn, data []byte) error {
+	timeout := time.Second * time.Duration(s.cfg.IdleTimeout)
+	return WriteFramedMessage(conn, data, timeout)
 }

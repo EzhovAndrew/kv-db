@@ -246,7 +246,7 @@ func (rm *ReplicationManager) sendLastLSNToMaster(ctx context.Context, client *n
 		zap.Uint64("last_lsn", lastLSN),
 		zap.String("slave_id", rm.cfg.Replication.SlaveID))
 
-	response, err := client.SendMessageWithTimeout(ctx, messageBytes, SyncTimeoutSeconds*time.Second)
+	response, err := client.SendFramedMessageWithTimeout(ctx, messageBytes, SyncTimeoutSeconds*time.Second)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrSendLSNSyncFailed, err)
 	}
