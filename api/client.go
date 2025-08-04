@@ -5,8 +5,13 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"errors"
 	"fmt"
+	"io"
+	"math/big"
 	"net"
+	"strings"
 	"sync"
 	"time"
 )
@@ -78,6 +83,9 @@ func (c *Client) Connect(ctx context.Context) error {
 // This method converts the result from GetBytes to a string.
 // For better performance with binary data or JSON, use GetBytes instead.
 //
+// The operation automatically retries on transient failures (network errors, timeouts)
+// using exponential backoff with jitter. Retry behavior is controlled by the client configuration.
+//
 // Returns the value and nil error if successful.
 // Returns empty string and KeyNotFoundError if the key doesn't exist.
 // Returns empty string and other error types for connection or server errors.
@@ -106,6 +114,9 @@ func (c *Client) Get(ctx context.Context, key string) (string, error) {
 // This is the core implementation that works directly with bytes to avoid conversions.
 // More efficient than Get when working with binary data or when you plan to unmarshal JSON.
 //
+// The operation automatically retries on transient failures (network errors)
+// using exponential backoff with jitter. Retry behavior is controlled by the client configuration.
+//
 // Returns the value as bytes and nil error if successful.
 // Returns nil and KeyNotFoundError if the key doesn't exist.
 // Returns nil and other error types for connection or server errors.
@@ -133,29 +144,22 @@ func (c *Client) GetBytes(ctx context.Context, key string) ([]byte, error) {
 		return nil, &InvalidArgumentError{Message: "key cannot be empty"}
 	}
 
-	if err := c.ensureConnected(ctx); err != nil {
-		return nil, err
-	}
+	var result []byte
+	err := c.retryOperation(ctx, func() error {
+		var err error
+		result, err = c.performGet(ctx, key)
+		return err
+	})
 
-	// Build binary protocol command
-	cmd := EncodeBinaryGet([]byte(key))
-
-	response, err := c.sendCommandBytes(ctx, cmd)
-	if err != nil {
-		return nil, err
-	}
-
-	// Handle key not found
-	if bytes.Contains(response, []byte("key not found")) || bytes.Contains(response, []byte("not found")) {
-		return nil, &KeyNotFoundError{Key: key}
-	}
-
-	return response, nil
+	return result, err
 }
 
 // Set stores a key-value pair in the database using a string value.
 // This method converts the string value to bytes and calls SetBytes.
 // For better performance with binary data or JSON, use SetBytes instead.
+//
+// The operation automatically retries on transient failures (network errors)
+// using exponential backoff with jitter. Retry behavior is controlled by the client configuration.
 //
 // Returns nil on success, error on failure.
 //
@@ -175,10 +179,10 @@ func (c *Client) Set(ctx context.Context, key, value string) error {
 // This is the core implementation that works directly with bytes to avoid conversions.
 // More efficient than Set when working with binary data or marshaled JSON.
 //
-// Returns nil on success, error on failure.
+// The operation automatically retries on transient failures (network errors)
+// using exponential backoff with jitter. Retry behavior is controlled by the client configuration.
 //
-// Note: Values containing whitespace (spaces, tabs, newlines) are not supported
-// by the current protocol and will return an error.
+// Returns nil on success, error on failure.
 //
 // Example:
 //
@@ -200,28 +204,16 @@ func (c *Client) SetBytes(ctx context.Context, key string, value []byte) error {
 		return &InvalidArgumentError{Message: "key cannot be empty"}
 	}
 
-	if err := c.ensureConnected(ctx); err != nil {
-		return err
-	}
-
-	// Build binary protocol command - binary protocol supports all values including whitespace
-	cmd := EncodeBinarySet([]byte(key), value)
-
-	response, err := c.sendCommandBytes(ctx, cmd)
-	if err != nil {
-		return err
-	}
-
-	// Check response - convert only for comparison
-	responseStr := string(response)
-	if responseStr != "OK" {
-		return &ServerError{Message: responseStr}
-	}
-
-	return nil
+	return c.retryOperation(ctx, func() error {
+		return c.performSet(ctx, key, value)
+	})
 }
 
 // Delete removes a key-value pair from the database.
+//
+// The operation automatically retries on transient failures (network errors)
+// using exponential backoff with jitter. Retry behavior is controlled by the client configuration.
+//
 // Returns nil on success, error on failure.
 // Note: Deleting a non-existent key is considered successful and returns nil.
 //
@@ -238,25 +230,9 @@ func (c *Client) Delete(ctx context.Context, key string) error {
 		return &InvalidArgumentError{Message: "key cannot be empty"}
 	}
 
-	if err := c.ensureConnected(ctx); err != nil {
-		return err
-	}
-
-	// Build binary protocol command
-	cmd := EncodeBinaryDel([]byte(key))
-
-	response, err := c.sendCommandBytes(ctx, cmd)
-	if err != nil {
-		return err
-	}
-
-	// Check response - convert only for comparison
-	responseStr := string(response)
-	if responseStr != "OK" {
-		return &ServerError{Message: responseStr}
-	}
-
-	return nil
+	return c.retryOperation(ctx, func() error {
+		return c.performDelete(ctx, key)
+	})
 }
 
 // Ping checks if the connection to the server is alive.
@@ -305,6 +281,80 @@ func (c *Client) ensureConnected(ctx context.Context) error {
 	return nil
 }
 
+// ===============================================
+// CORE OPERATION IMPLEMENTATIONS
+// ===============================================
+// These functions contain the actual database operation logic,
+// separated from retry handling for better readability.
+
+// performGet executes a single GET operation without retry logic.
+func (c *Client) performGet(ctx context.Context, key string) ([]byte, error) {
+	if err := c.ensureConnected(ctx); err != nil {
+		return nil, err
+	}
+
+	// Build binary protocol command
+	cmd := EncodeBinaryGet([]byte(key))
+
+	response, err := c.sendCommandBytes(ctx, cmd)
+	if err != nil {
+		return nil, err
+	}
+
+	// Handle key not found
+	if bytes.Contains(response, []byte("key not found")) || bytes.Contains(response, []byte("not found")) {
+		return nil, &KeyNotFoundError{Key: key}
+	}
+
+	return response, nil
+}
+
+// performSet executes a single SET operation without retry logic.
+func (c *Client) performSet(ctx context.Context, key string, value []byte) error {
+	if err := c.ensureConnected(ctx); err != nil {
+		return err
+	}
+
+	// Build binary protocol command - binary protocol supports all values including whitespace
+	cmd := EncodeBinarySet([]byte(key), value)
+
+	response, err := c.sendCommandBytes(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	// Check response - convert only for comparison
+	responseStr := string(response)
+	if responseStr != "OK" {
+		return &ServerError{Message: responseStr}
+	}
+
+	return nil
+}
+
+// performDelete executes a single DELETE operation without retry logic.
+func (c *Client) performDelete(ctx context.Context, key string) error {
+	if err := c.ensureConnected(ctx); err != nil {
+		return err
+	}
+
+	// Build binary protocol command
+	cmd := EncodeBinaryDel([]byte(key))
+
+	response, err := c.sendCommandBytes(ctx, cmd)
+	if err != nil {
+		return err
+	}
+
+	// Check response - convert only for comparison
+	responseStr := string(response)
+	if responseStr != "OK" {
+		return &ServerError{Message: responseStr}
+	}
+
+	return nil
+}
+
 // sendCommandBytes sends a command as bytes to the server and returns the response as bytes.
 // This is the core method that works entirely with bytes to avoid string conversions.
 func (c *Client) sendCommandBytes(ctx context.Context, command []byte) ([]byte, error) {
@@ -335,7 +385,9 @@ func (c *Client) sendCommandBytes(ctx context.Context, command []byte) ([]byte, 
 
 	_, err := conn.Write(command)
 	if err != nil {
-		c.disconnect()
+		if c.isConnectionBroken(err) {
+			c.disconnect()
+		}
 		return nil, &NetworkError{Err: err}
 	}
 
@@ -343,13 +395,51 @@ func (c *Client) sendCommandBytes(ctx context.Context, command []byte) ([]byte, 
 	buffer := make([]byte, c.config.MaxMessageSize)
 	n, err := conn.Read(buffer)
 	if err != nil {
-		c.disconnect()
+		if c.isConnectionBroken(err) {
+			c.disconnect()
+		}
 		return nil, &NetworkError{Err: err}
 	}
 
 	// Return raw bytes, trimming trailing whitespace
 	response := bytes.TrimSpace(buffer[:n])
 	return response, nil
+}
+
+// isConnectionBroken determines if an error indicates the connection is actually broken
+// and should be closed, versus a transient error that might resolve on retry.
+func (c *Client) isConnectionBroken(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// Check for specific errors that indicate broken connection
+	errorStr := err.Error()
+
+	// Connection definitively broken
+	if errors.Is(err, io.EOF) || // Server closed connection
+		errors.Is(err, io.ErrUnexpectedEOF) || // Connection abruptly terminated
+		strings.Contains(errorStr, "connection reset by peer") ||
+		strings.Contains(errorStr, "broken pipe") ||
+		strings.Contains(errorStr, "connection refused") ||
+		strings.Contains(errorStr, "network is unreachable") ||
+		strings.Contains(errorStr, "no route to host") {
+		return true
+	}
+
+	// Context errors - don't disconnect, user choice
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return false
+	}
+
+	// Timeout errors - could be transient network congestion
+	if strings.Contains(errorStr, "timeout") || strings.Contains(errorStr, "deadline exceeded") {
+		return false // Keep connection, might recover
+	}
+
+	// For unknown errors, be conservative and keep the connection
+	// Let the retry logic handle it, only disconnect on clear indicators
+	return false
 }
 
 // disconnect safely closes the connection
@@ -361,4 +451,128 @@ func (c *Client) disconnect() {
 		c.conn.Close()
 		c.conn = nil
 	}
+}
+
+// ===============================================
+// RETRY LOGIC IMPLEMENTATION
+// ===============================================
+// These functions handle automatic retry behavior with exponential backoff.
+
+// isRetryableError determines if an error should trigger a retry attempt.
+// Returns true for network errors, connection failures.
+// Returns false for application-level errors like invalid arguments or key not found.
+func (c *Client) isRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// Retryable errors (transient infrastructure issues)
+	if errors.Is(err, ErrNetworkError) || errors.Is(err, ErrConnectionFailed) {
+		return true
+	}
+
+	// Non-retryable errors (permanent failures or user intent)
+	if errors.Is(err, ErrServerError) ||
+		errors.Is(err, ErrKeyNotFound) ||
+		errors.Is(err, ErrInvalidArgument) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, context.Canceled) {
+		return false
+	}
+
+	// Conservative approach: retry unknown errors
+	return true
+}
+
+// calculateRetryDelay computes the delay for a retry attempt using exponential backoff with jitter.
+func (c *Client) calculateRetryDelay(attempt int) time.Duration {
+	if c.config.RetryAttempts <= 0 {
+		return 0
+	}
+
+	// Use RetryBaseDelay from configuration
+	baseDelay := c.config.RetryBaseDelay
+	if baseDelay == 0 {
+		baseDelay = 100 * time.Millisecond // Fallback if somehow not set
+	}
+
+	// Calculate exponential backoff: baseDelay * 2^attempt
+	delay := baseDelay << attempt
+
+	// Cap at maximum delay
+	if c.config.RetryMaxDelay > 0 && delay > c.config.RetryMaxDelay {
+		delay = c.config.RetryMaxDelay
+	}
+
+	// Add jitter if enabled
+	if c.config.RetryJitter {
+		jitter := c.calculateJitter(delay)
+		delay = delay + jitter
+	}
+
+	return delay
+}
+
+// calculateJitter adds random variation to prevent thundering herd.
+// Returns a value between -25% and +25% of the input delay.
+func (c *Client) calculateJitter(delay time.Duration) time.Duration {
+	if delay <= 0 {
+		return 0
+	}
+
+	// Calculate 25% of delay for jitter range
+	jitterRange := delay / 4
+
+	// Generate cryptographically secure random number
+	randomBig, err := rand.Int(rand.Reader, big.NewInt(int64(jitterRange*2)+1))
+	if err != nil {
+		// Fallback to no jitter if crypto/rand fails
+		return 0
+	}
+
+	// Convert to jitter value: -25% to +25%
+	jitter := time.Duration(randomBig.Int64()) - jitterRange
+	return jitter
+}
+
+// retryOperation wraps an operation with retry logic using exponential backoff and jitter.
+func (c *Client) retryOperation(ctx context.Context, operation func() error) error {
+	if c.config.RetryAttempts <= 0 {
+		// Retries disabled, execute once
+		return operation()
+	}
+
+	var lastErr error
+	for attempt := 0; attempt <= c.config.RetryAttempts; attempt++ {
+		// Execute the operation
+		err := operation()
+		if err == nil {
+			return nil // Success!
+		}
+
+		lastErr = err
+
+		// Check if this is the last attempt
+		if attempt == c.config.RetryAttempts {
+			break // Don't delay after the final attempt
+		}
+
+		// Check if error is retryable
+		if !c.isRetryableError(err) {
+			break // Don't retry non-retryable errors
+		}
+
+		// Calculate delay for this attempt
+		delay := c.calculateRetryDelay(attempt)
+
+		// Wait for the delay, respecting context cancellation
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+			// Continue to next attempt
+		}
+	}
+
+	return lastErr
 }

@@ -128,7 +128,7 @@ func TestConfigWithMethods(t *testing.T) {
 		WithOperationTimeout(10 * time.Second).
 		WithMaxMessageSize(8192).
 		WithRetryAttempts(5).
-		WithRetryDelay(200 * time.Millisecond)
+		WithRetryBaseDelay(200 * time.Millisecond)
 
 	if config.Host != "192.168.1.1" {
 		t.Errorf("Expected Host '192.168.1.1', got '%s'", config.Host)
@@ -154,8 +154,8 @@ func TestConfigWithMethods(t *testing.T) {
 		t.Errorf("Expected RetryAttempts 5, got %d", config.RetryAttempts)
 	}
 
-	if config.RetryDelay != 200*time.Millisecond {
-		t.Errorf("Expected RetryDelay 200ms, got %v", config.RetryDelay)
+	if config.RetryBaseDelay != 200*time.Millisecond {
+		t.Errorf("Expected RetryBaseDelay 200ms, got %v", config.RetryBaseDelay)
 	}
 }
 

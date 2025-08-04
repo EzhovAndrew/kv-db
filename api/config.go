@@ -29,12 +29,24 @@ type Config struct {
 	MaxMessageSize int
 
 	// RetryAttempts is the number of times to retry failed operations.
+	// Set to 0 to disable retries.
 	// Default: 3
 	RetryAttempts int
 
-	// RetryDelay is the delay between retry attempts.
+	// RetryBaseDelay is the base delay for the first retry attempt.
+	// Subsequent delays will be calculated using exponential backoff.
 	// Default: 100 milliseconds
-	RetryDelay time.Duration
+	RetryBaseDelay time.Duration
+
+	// RetryMaxDelay is the maximum delay between retry attempts.
+	// Prevents exponential backoff from growing too large.
+	// Default: 5 seconds
+	RetryMaxDelay time.Duration
+
+	// RetryJitter enables random jitter to prevent thundering herd.
+	// When enabled, adds ±25% random variation to delay times.
+	// Default: true
+	RetryJitter bool
 }
 
 // DefaultConfig returns a Config with sensible default values.
@@ -46,7 +58,9 @@ func DefaultConfig() *Config {
 		OperationTimeout:  5 * time.Second,
 		MaxMessageSize:    4096,
 		RetryAttempts:     3,
-		RetryDelay:        100 * time.Millisecond,
+		RetryBaseDelay:    100 * time.Millisecond,
+		RetryMaxDelay:     5 * time.Second,
+		RetryJitter:       true,
 	}
 }
 
@@ -76,8 +90,16 @@ func (c *Config) Validate() error {
 		return errors.New("retry attempts cannot be negative")
 	}
 
-	if c.RetryDelay < 0 {
-		return errors.New("retry delay cannot be negative")
+	if c.RetryBaseDelay < 0 {
+		return errors.New("retry base delay cannot be negative")
+	}
+
+	if c.RetryMaxDelay < 0 {
+		return errors.New("retry max delay cannot be negative")
+	}
+
+	if c.RetryMaxDelay > 0 && c.RetryBaseDelay > c.RetryMaxDelay {
+		return errors.New("retry base delay cannot be greater than max delay")
 	}
 
 	return nil
@@ -119,8 +141,20 @@ func (c *Config) WithRetryAttempts(attempts int) *Config {
 	return c
 }
 
-// WithRetryDelay sets the retry delay and returns the config for method chaining.
-func (c *Config) WithRetryDelay(delay time.Duration) *Config {
-	c.RetryDelay = delay
+// WithRetryBaseDelay sets the base retry delay and returns the config for method chaining.
+func (c *Config) WithRetryBaseDelay(delay time.Duration) *Config {
+	c.RetryBaseDelay = delay
+	return c
+}
+
+// WithRetryMaxDelay sets the maximum retry delay and returns the config for method chaining.
+func (c *Config) WithRetryMaxDelay(delay time.Duration) *Config {
+	c.RetryMaxDelay = delay
+	return c
+}
+
+// WithRetryJitter enables or disables jitter and returns the config for method chaining.
+func (c *Config) WithRetryJitter(enabled bool) *Config {
+	c.RetryJitter = enabled
 	return c
 }

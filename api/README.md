@@ -85,7 +85,9 @@ Default values:
 - **Operation Timeout**: `5 seconds`
 - **Max Message Size**: `4096 bytes`
 - **Retry Attempts**: `3`
-- **Retry Delay**: `100 milliseconds`
+- **Retry Base Delay**: `100 milliseconds`
+- **Retry Max Delay**: `5 seconds`
+- **Retry Jitter**: `enabled`
 
 ### Custom Configuration
 
@@ -109,7 +111,9 @@ type Config struct {
     OperationTimeout  time.Duration // Timeout for individual operations
     MaxMessageSize    int           // Maximum message size (should match server config)
     RetryAttempts     int           // Number of retry attempts
-    RetryDelay        time.Duration // Delay between retries
+    RetryBaseDelay    time.Duration // Base delay for exponential backoff
+    RetryMaxDelay     time.Duration // Maximum delay cap for retries
+    RetryJitter       bool          // Enable random jitter
 }
 ```
 
