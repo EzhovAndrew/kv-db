@@ -33,8 +33,8 @@ func main() {
 	fmt.Println("\n2. Performing basic operations...")
 
 	// Set a key-value pair
-	fmt.Println("   Setting key 'user:123' = 'JohnDoe'...")
-	err = client.Set(ctx, "user:123", "JohnDoe")
+	fmt.Println("   Setting key 'user:123' = 'John Doe'...")
+	err = client.Set(ctx, "user:123", "John Doe")
 	if err != nil {
 		log.Printf("Failed to set value: %v", err)
 		return

@@ -137,13 +137,10 @@ func (c *Client) GetBytes(ctx context.Context, key string) ([]byte, error) {
 		return nil, err
 	}
 
-	// Build command using bytes.Buffer - add newline for protocol compatibility
-	var cmd bytes.Buffer
-	cmd.WriteString("GET ")
-	cmd.WriteString(key)
-	cmd.WriteString("\n") // Add newline as original client does
+	// Build binary protocol command
+	cmd := EncodeBinaryGet([]byte(key))
 
-	response, err := c.sendCommandBytes(ctx, cmd.Bytes())
+	response, err := c.sendCommandBytes(ctx, cmd)
 	if err != nil {
 		return nil, err
 	}
@@ -203,28 +200,14 @@ func (c *Client) SetBytes(ctx context.Context, key string, value []byte) error {
 		return &InvalidArgumentError{Message: "key cannot be empty"}
 	}
 
-	// Check for whitespace in value - the protocol doesn't support it
-	if bytes.ContainsAny(value, " \t\n\r") {
-		return &InvalidArgumentError{
-			Message: "values containing whitespace (spaces, tabs, newlines) " +
-				"are not supported by the protocol and will be improved " +
-				"in future releases.",
-		}
-	}
-
 	if err := c.ensureConnected(ctx); err != nil {
 		return err
 	}
 
-	// Build command using bytes.Buffer - add newline for protocol compatibility
-	var cmd bytes.Buffer
-	cmd.WriteString("SET ")
-	cmd.WriteString(key)
-	cmd.WriteString(" ")
-	cmd.Write(value)
-	cmd.WriteString("\n") // Add newline as original client does
+	// Build binary protocol command - binary protocol supports all values including whitespace
+	cmd := EncodeBinarySet([]byte(key), value)
 
-	response, err := c.sendCommandBytes(ctx, cmd.Bytes())
+	response, err := c.sendCommandBytes(ctx, cmd)
 	if err != nil {
 		return err
 	}
@@ -259,13 +242,10 @@ func (c *Client) Delete(ctx context.Context, key string) error {
 		return err
 	}
 
-	// Build command using bytes.Buffer - add newline for protocol compatibility
-	var cmd bytes.Buffer
-	cmd.WriteString("DEL ")
-	cmd.WriteString(key)
-	cmd.WriteString("\n") // Add newline as original client does
+	// Build binary protocol command
+	cmd := EncodeBinaryDel([]byte(key))
 
-	response, err := c.sendCommandBytes(ctx, cmd.Bytes())
+	response, err := c.sendCommandBytes(ctx, cmd)
 	if err != nil {
 		return err
 	}

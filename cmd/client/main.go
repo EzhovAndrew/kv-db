@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/EzhovAndrew/kv-db/api"
 	"github.com/chzyer/readline"
 )
 
@@ -24,13 +25,13 @@ type Client struct {
 	conn net.Conn
 }
 
-func (c *Client) SendCommand(command string) (string, error) {
+func (c *Client) SendCommand(command []byte) (string, error) {
 	err := c.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	if err != nil {
 		return "", fmt.Errorf("failed to set write deadline: %w", err)
 	}
 
-	_, err = c.conn.Write([]byte(command))
+	_, err = c.conn.Write(command)
 	if err != nil {
 		return "", fmt.Errorf("failed to send command: %w", err)
 	}
@@ -50,17 +51,17 @@ func (c *Client) SendCommand(command string) (string, error) {
 }
 
 func (c *Client) SendGetCommand(key string) (string, error) {
-	command := fmt.Sprintf("GET %s\n", key)
+	command := api.EncodeBinaryGet([]byte(key))
 	return c.SendCommand(command)
 }
 
 func (c *Client) SendSetCommand(key, value string) (string, error) {
-	command := fmt.Sprintf("SET %s %s\n", key, value)
+	command := api.EncodeBinarySet([]byte(key), []byte(value))
 	return c.SendCommand(command)
 }
 
 func (c *Client) SendDelCommand(key string) (string, error) {
-	command := fmt.Sprintf("DEL %s\n", key)
+	command := api.EncodeBinaryDel([]byte(key))
 	return c.SendCommand(command)
 }
 

@@ -63,7 +63,7 @@ func main() {
 
 	user := User{
 		ID:     123,
-		Name:   "AliceJohnson",
+		Name:   "Alice Johnson",
 		Email:  "alice@example.com",
 		Age:    28,
 		Active: true,
@@ -167,9 +167,9 @@ func main() {
 	fmt.Println("\n4. Working with arrays of objects...")
 
 	users := []User{
-		{ID: 1, Name: "BobSmith", Email: "bob@example.com", Age: 32, Active: true},
-		{ID: 2, Name: "CarolDavis", Email: "carol@example.com", Age: 27, Active: true},
-		{ID: 3, Name: "DavidWilson", Email: "david@example.com", Age: 35, Active: false},
+		{ID: 1, Name: "Bob Smith", Email: "bob@example.com", Age: 32, Active: true},
+		{ID: 2, Name: "Carol Davis", Email: "carol@example.com", Age: 27, Active: true},
+		{ID: 3, Name: "David Wilson", Email: "david@example.com", Age: 35, Active: false},
 	}
 
 	// Store array

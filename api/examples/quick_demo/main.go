@@ -80,7 +80,7 @@ func main() {
 	fmt.Println("\n5. Performing multiple operations...")
 	testData := map[string]string{
 		"demo:config:timeout": "30",
-		"demo:user:123":       "JohnDoe",
+		"demo:user:123":       "John Doe",
 		"demo:session:abc123": "active",
 		"demo:cache:popular":  "golang,database,performance",
 	}
