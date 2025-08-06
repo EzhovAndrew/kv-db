@@ -3,6 +3,7 @@ package compute
 import (
 	"testing"
 
+	"github.com/EzhovAndrew/kv-db/api"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -13,247 +14,217 @@ func TestNewCompute(t *testing.T) {
 	assert.IsType(t, &Compute{}, compute)
 }
 
-func TestCompute_Parse_EmptyCommand(t *testing.T) {
+func TestCompute_Parse_BinaryProtocol_ValidCommands(t *testing.T) {
 	compute := NewCompute()
 
 	tests := []struct {
-		name string
-		cmd  string
+		name         string
+		command      string
+		key          string
+		value        string
+		expectedID   int
+		expectedArgs []string
 	}{
 		{
-			name: "empty string",
-			cmd:  "",
+			name:         "GET command",
+			command:      "GET",
+			key:          "testkey",
+			value:        "",
+			expectedID:   GetCommandID,
+			expectedArgs: []string{"testkey"},
 		},
 		{
-			name: "whitespace only",
-			cmd:  "   ",
+			name:         "SET command",
+			command:      "SET",
+			key:          "testkey",
+			value:        "testvalue",
+			expectedID:   SetCommandID,
+			expectedArgs: []string{"testkey", "testvalue"},
 		},
 		{
-			name: "tabs and spaces",
-			cmd:  "\t  \n  ",
+			name:         "DEL command",
+			command:      "DEL",
+			key:          "testkey",
+			value:        "",
+			expectedID:   DelCommandID,
+			expectedArgs: []string{"testkey"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			query, err := compute.Parse(tt.cmd)
+			data := api.EncodeBinaryCommand([]byte(tt.command), []byte(tt.key), []byte(tt.value))
+			query, err := compute.Parse(data)
 
-			assert.Error(t, err)
-			assert.Equal(t, ErrEmptyCommand, err)
-			assert.Equal(t, Query{}, query)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.expectedID, query.CommandID())
+			assert.Equal(t, tt.expectedArgs, query.Arguments())
 		})
 	}
 }
 
-func TestCompute_Parse_UnknownCommand(t *testing.T) {
+func TestCompute_Parse_WhitespaceValues(t *testing.T) {
 	compute := NewCompute()
 
 	tests := []struct {
-		name string
-		cmd  string
+		name  string
+		key   string
+		value string
 	}{
 		{
-			name: "unknown command",
-			cmd:  "UNKNOWN",
+			name:  "value with spaces",
+			key:   "key1",
+			value: "hello world with spaces",
 		},
 		{
-			name: "unknown command with args",
-			cmd:  "INVALID arg1 arg2",
+			name:  "value with newlines",
+			key:   "key2",
+			value: "line1\nline2\nline3",
 		},
 		{
-			name: "random string",
-			cmd:  "randomcommand",
+			name:  "value with tabs",
+			key:   "key3",
+			value: "col1\tcol2\tcol3",
 		},
 		{
-			name: "numeric command",
-			cmd:  "123",
+			name:  "value with mixed whitespace",
+			key:   "key4",
+			value: "mixed\t whitespace\n here",
+		},
+		{
+			name:  "value with carriage returns",
+			key:   "key5",
+			value: "text\rwith\rcarriage\rreturns",
+		},
+		{
+			name:  "key with underscores (should work)",
+			key:   "key_with_underscores",
+			value: "value with spaces and\ttabs\nand newlines",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			query, err := compute.Parse(tt.cmd)
+			data := api.EncodeBinarySet([]byte(tt.key), []byte(tt.value))
+			query, err := compute.Parse(data)
 
-			assert.Error(t, err)
-			assert.Equal(t, ErrUnknownCommand, err)
-			assert.Equal(t, Query{}, query)
+			assert.NoError(t, err)
+			assert.Equal(t, SetCommandID, query.CommandID())
+			assert.Equal(t, []string{tt.key, tt.value}, query.Arguments())
 		})
 	}
 }
 
-func TestCompute_Parse_InvalidArgumentsNumber(t *testing.T) {
+func TestCompute_Parse_ErrorCases(t *testing.T) {
 	compute := NewCompute()
 
 	tests := []struct {
 		name        string
-		cmd         string
-		description string
+		data        []byte
+		expectedErr error
 	}{
 		{
-			name:        "too few SET arguments",
-			cmd:         "SET key",
-			description: "SET command with insufficient arguments",
+			name:        "empty data",
+			data:        []byte{},
+			expectedErr: ErrEmptyCommand,
 		},
 		{
-			name:        "too few GET arguments",
-			cmd:         "GET",
-			description: "GET command with insufficient arguments",
+			name:        "incomplete command length",
+			data:        []byte{},
+			expectedErr: ErrEmptyCommand,
 		},
 		{
-			name:        "too few DEL arguments",
-			cmd:         "DEL",
-			description: "DEL command with insufficient arguments",
+			name:        "invalid command length",
+			data:        []byte{10}, // command length 10 but no data
+			expectedErr: ErrInvalidProtocol,
 		},
 		{
-			name:        "too many GET arguments",
-			cmd:         "GET key extra_arg",
-			description: "GET command with excessive arguments",
+			name:        "unknown command",
+			data:        api.EncodeBinaryCommand([]byte("INVALID"), []byte("key"), nil),
+			expectedErr: ErrUnknownCommand,
 		},
 		{
-			name:        "too many SET arguments",
-			cmd:         "SET key value extra_arg",
-			description: "SET command with excessive arguments",
+			name:        "SET command without value",
+			data:        api.EncodeBinaryCommand([]byte("SET"), []byte("key"), nil),
+			expectedErr: ErrInvalidArgumentsNumber,
 		},
 		{
-			name:        "too many DEL arguments",
-			cmd:         "DEL key extra_arg",
-			description: "DEL command with excessive arguments",
+			name:        "GET command with value",
+			data:        api.EncodeBinaryCommand([]byte("GET"), []byte("key"), []byte("value")),
+			expectedErr: ErrInvalidArgumentsNumber,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			query, err := compute.Parse(tt.cmd)
+			query, err := compute.Parse(tt.data)
 
 			assert.Error(t, err)
-			assert.Equal(t, ErrInvalidArgumentsNumber, err)
+			assert.Equal(t, tt.expectedErr, err)
 			assert.Equal(t, Query{}, query)
 		})
 	}
 }
 
-func TestCompute_Parse_ValidCommands(t *testing.T) {
+func TestCompute_Protocol_RoundTrip(t *testing.T) {
 	compute := NewCompute()
 
 	tests := []struct {
-		name        string
-		cmd         string
-		description string
-		commandID   int
-		arguments   []string
+		name    string
+		command string
+		key     string
+		value   string
 	}{
 		{
-			name:        "GET command",
-			cmd:         "GET key",
-			description: "Valid GET command",
-			commandID:   GetCommandID,
-			arguments:   []string{"key"},
+			name:    "simple GET",
+			command: "GET",
+			key:     "simple",
+			value:   "",
 		},
 		{
-			name:        "SET command",
-			cmd:         "SET key value",
-			description: "Valid SET command",
-			commandID:   SetCommandID,
-			arguments:   []string{"key", "value"},
+			name:    "simple SET",
+			command: "SET",
+			key:     "simple",
+			value:   "value",
 		},
 		{
-			name:        "DEL command",
-			cmd:         "DEL key",
-			description: "Valid DEL command",
-			commandID:   DelCommandID,
-			arguments:   []string{"key"},
+			name:    "complex value with all whitespace types",
+			command: "SET",
+			key:     "complex",
+			value:   "value with\nspaces\tand\ttabs\nand\r\nmultiple\nlines",
+		},
+		{
+			name:    "unicode value",
+			command: "SET",
+			key:     "unicode",
+			value:   "héllo wörld 🌍 with émojis",
+		},
+		{
+			name:    "binary-like value",
+			command: "SET",
+			key:     "binary",
+			value:   string([]byte{0, 1, 2, 255, 254, 253}),
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			query, err := compute.Parse(tt.cmd)
+			// Encode
+			encoded := api.EncodeBinaryCommand([]byte(tt.command), []byte(tt.key), []byte(tt.value))
+
+			// Parse
+			query, err := compute.Parse(encoded)
 			assert.NoError(t, err)
-			assert.NotEqual(t, Query{}, query)
-			assert.Equal(t, tt.commandID, query.CommandID())
-			assert.Equal(t, tt.arguments, query.Arguments())
-		})
-	}
-}
 
-func TestCompute_Parse_WhitespaceHandling(t *testing.T) {
-	compute := NewCompute()
+			// Verify command
+			expectedID := commandNameToCommandID(tt.command)
+			assert.Equal(t, expectedID, query.CommandID())
 
-	tests := []struct {
-		name string
-		cmd  string
-	}{
-		{
-			name: "extra spaces between words",
-			cmd:  "GET    key1",
-		},
-		{
-			name: "leading spaces",
-			cmd:  "   GET key1",
-		},
-		{
-			name: "trailing spaces",
-			cmd:  "GET key1   ",
-		},
-		{
-			name: "mixed whitespace",
-			cmd:  "  GET   key1  ",
-		},
-		{
-			name: "tabs and spaces mixed",
-			cmd:  "\tGET\t\tkey1\t",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			query, err := compute.Parse(tt.cmd)
-
-			assert.NoError(t, err)
-			assert.NotEqual(t, Query{}, query)
-			assert.Equal(t, GetCommandID, query.CommandID())
-			assert.Equal(t, []string{"key1"}, query.Arguments())
-		})
-	}
-}
-
-func TestCompute_Parse_CaseSensitivity(t *testing.T) {
-	compute := NewCompute()
-
-	tests := []struct {
-		name      string
-		cmd       string
-		wantError bool
-	}{
-		{
-			name:      "lowercase command",
-			cmd:       "get key1",
-			wantError: true,
-		},
-		{
-			name:      "uppercase correct command",
-			cmd:       "GET key1",
-			wantError: false,
-		},
-		{
-			name:      "mixed case command",
-			cmd:       "GeT key1",
-			wantError: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			query, err := compute.Parse(tt.cmd)
-			if tt.wantError {
-				assert.Error(t, err)
-				assert.Equal(t, ErrUnknownCommand, err)
-				assert.Equal(t, Query{}, query)
+			// Verify arguments
+			if tt.value == "" {
+				assert.Equal(t, []string{tt.key}, query.Arguments())
 			} else {
-				assert.NoError(t, err)
-				assert.NotEqual(t, Query{}, query)
-				assert.Equal(t, GetCommandID, query.CommandID())
-				assert.Equal(t, []string{"key1"}, query.Arguments())
+				assert.Equal(t, []string{tt.key, tt.value}, query.Arguments())
 			}
 		})
 	}
@@ -265,9 +236,11 @@ func TestCompute_Parse_ErrorTypes(t *testing.T) {
 		assert.NotNil(t, ErrEmptyCommand)
 		assert.NotNil(t, ErrUnknownCommand)
 		assert.NotNil(t, ErrInvalidArgumentsNumber)
+		assert.NotNil(t, ErrInvalidProtocol)
 
 		assert.Contains(t, ErrEmptyCommand.Error(), "empty command")
 		assert.Contains(t, ErrUnknownCommand.Error(), "unknown command")
 		assert.Contains(t, ErrInvalidArgumentsNumber.Error(), "invalid arguments number")
+		assert.Contains(t, ErrInvalidProtocol.Error(), "invalid protocol")
 	})
 }

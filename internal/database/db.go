@@ -47,7 +47,7 @@ func (db *Database) SetReadOnly() {
 }
 
 func (db *Database) HandleRequest(ctx context.Context, data []byte) []byte {
-	query, err := db.compute.Parse(string(data))
+	query, err := db.compute.Parse(data)
 	if err != nil {
 		return []byte(err.Error())
 	}
